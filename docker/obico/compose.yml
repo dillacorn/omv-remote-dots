@@ -1,0 +1,145 @@
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-${SERVICE}
+    hostname: ${SERVICE}
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    volumes:
+      - ./ts/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "3334:3334"
+    networks:
+      - obico
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  collectstatic:
+    image: ghcr.io/gabe565/obico/web
+    container_name: obico-collectstatic
+    env_file:
+      - .env
+    command: [python, manage.py, collectstatic, --verbosity=2, --noinput, --link]
+    volumes:
+      - ./data/data:/data
+      - ./data/media:/app/static_build/media
+      - static:/app/static_build
+    networks:
+      - obico
+
+  migrate:
+    image: ghcr.io/gabe565/obico/web
+    container_name: obico-migrate
+    env_file:
+      - .env
+    command: [python, manage.py, migrate]
+    volumes:
+      - ./data/data:/data
+      - ./data/media:/app/static_build/media
+      - static:/app/static_build
+    networks:
+      - obico
+    depends_on:
+      collectstatic:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      ml_api:
+        condition: service_started
+
+  web:
+    image: ghcr.io/gabe565/obico/web
+    container_name: app-${SERVICE}
+    env_file:
+      - .env
+    command: [python, manage.py, runserver, --noreload, 0.0.0.0:3334]
+    network_mode: service:tailscale
+    volumes:
+      - ./data/data:/data
+      - ./data/media:/app/static_build/media
+      - static:/app/static_build
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      collectstatic:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      ml_api:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  tasks:
+    image: ghcr.io/gabe565/obico/web
+    container_name: obico-tasks
+    hostname: tasks
+    env_file:
+      - .env
+    command:
+      - celery
+      - --app=config
+      - worker
+      - --beat
+      - --loglevel=info
+      - --concurrency=2
+      - --queues=realtime,celery
+      - --schedule=/tmp/celerybeat-schedule
+    volumes:
+      - ./data/data:/data
+      - ./data/media:/app/static_build/media
+      - static:/app/static_build
+    networks:
+      - obico
+    depends_on:
+      collectstatic:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      ml_api:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  ml_api:
+    image: ghcr.io/gabe565/obico/ml-api
+    container_name: obico-ml-api
+    hostname: ml_api
+    environment:
+      DEBUG: "True"
+      FLASK_APP: "server.py"
+    command: [gunicorn, --bind=0.0.0.0:3333, --workers=1, --access-logfile=-, wsgi]
+    networks:
+      - obico
+    restart: unless-stopped
+    tty: true
+    gpus: all
+
+  redis:
+    image: redis:8.6-alpine
+    container_name: obico-redis
+    networks:
+      - obico
+    restart: unless-stopped
+
+networks:
+  obico:
+
+volumes:
+  static: {}
