@@ -51,6 +51,7 @@ declare -A SERVICE_CONTAINER=(
   [jellyseerr]="tailscale-jellyseerr"
   [audiobookshelf]="tailscale-audiobookshelf"
   [brave]="tailscale-brave"
+  [ntfy]="tailscale-ntfy"
 )
 
 # Optional per-service cert directory overrides.
@@ -61,6 +62,7 @@ declare -A SERVICE_CERT_DIR=(
   [jellyseerr]="/docker/jellyseerr/ts/state/certs"
   [audiobookshelf]="/docker/audiobookshelf/ts/state/certs"
   [brave]="/docker/brave/ts/state/certs"
+  [ntfy]="/docker/ntfy/ts/state/certs"
 )
 
 ###############################################################################
