@@ -41,7 +41,7 @@ RESTART_NGINX=1
 
 # Optional sidecar services to renew.
 # Add more names here as needed.
-EXTRA_SERVICES=("jellyfin" "flame" "jellyseerr" "audiobookshelf" "brave")
+EXTRA_SERVICES=("jellyfin" "flame" "jellyseerr" "audiobookshelf" "brave" "ntfy")
 
 # Optional per-service container overrides.
 # Default if omitted: tailscale-<service>
