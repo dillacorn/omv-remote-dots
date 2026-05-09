@@ -18,6 +18,8 @@ services:
         192.168.68.118 qidi.time-puffin.ts.net
         192.168.68.2 obico.time-puffin.ts.net
         192.168.68.86 k1.time-puffin.ts.net
+        192.168.68.2 immich.time-puffin.ts.net
+        192.168.68.2 vaultwarden.time-puffin.ts.net
       PIHOLE_UID: "1000"
       PIHOLE_GID: "1000"
     ports:
@@ -57,6 +59,8 @@ services:
       - /docker/brave/ts/state/certs:/etc/nginx/brave-certs:ro
       - /docker/audiobookshelf/ts/state/certs:/etc/nginx/audiobookshelf-certs:ro
       - /docker/ntfy/ts/state/certs:/etc/nginx/ntfy-certs:ro
+      - /docker/immich/ts/state/certs:/etc/nginx/immich-certs:ro
+      - /docker/vaultwarden/ts/state/certs:/etc/nginx/vaultwarden-certs:ro
     restart: unless-stopped
     read_only: true
     tmpfs:

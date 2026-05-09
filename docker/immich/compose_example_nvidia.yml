@@ -3,6 +3,61 @@
 
 name: immich
 
+configs:
+  ts-serve:
+    content: |
+      {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://127.0.0.1:${SERVICEPORT}"
+              }
+            }
+          }
+        },
+        "AllowFunnel": {
+          "$${TS_CERT_DOMAIN}:443": false
+        }
+      }
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-${SERVICE}
+    hostname: ${SERVICE}
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    configs:
+      - source: ts-serve
+        target: /config/serve.json
+    volumes:
+      - ./config:/config
+      - ./ts/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
 services:
   immich-server:
     container_name: immich_server
@@ -44,7 +99,7 @@ services:
 
   redis:
     container_name: immich_redis
-    image: docker.io/valkey/valkey:9@sha256:546304417feac0874c3dd576e0952c6bb8f06bb4093ea0c9ca303c73cf458f63
+    image: docker.io/valkey/valkey:9@sha256:3b55fbaa0cd93cf0d9d961f405e4dfcc70efe325e2d84da207a0a8e6d8fde4f9
     healthcheck:
       test: redis-cli ping || exit 1
     restart: always
@@ -66,22 +121,6 @@ services:
     restart: always
     healthcheck:
       disable: false
-
-  nginx:
-    image: nginx:alpine
-    container_name: nginx-immich
-    restart: unless-stopped
-    ports:
-      - "2283:2283"
-      - "2284:2284"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
-      - /docker/tailscale-certs:/etc/nginx/certs:ro
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /var/tmp
 
 volumes:
   model-cache:
