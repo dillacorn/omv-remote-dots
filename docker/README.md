@@ -42,7 +42,6 @@ rsync -avh --progress --delete --info=progress2 /ssd/docker/ /hdd/docker_backup/
 ## 🛠️ Container Management
 
 ### Basic Commands
-```bash
 # Start container
 ```bash
 docker compose up -d
