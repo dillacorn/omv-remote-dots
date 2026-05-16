@@ -1,0 +1,182 @@
+configs:
+  ts-serve-transmission:
+    content: |
+      {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://gluetun:${TRANSMISSION_SERVICEPORT}"
+              }
+            }
+          }
+        },
+        "AllowFunnel": {
+          "$${TS_CERT_DOMAIN}:443": false
+        }
+      }
+
+  ts-serve-mullvad:
+    content: |
+      {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://gluetun:${MULLVAD_SERVICEPORT}"
+              }
+            }
+          }
+        },
+        "AllowFunnel": {
+          "$${TS_CERT_DOMAIN}:443": false
+        }
+      }
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=${VPN_TYPE}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_PRESHARED_KEY=${WIREGUARD_PRESHARED_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - WIREGUARD_ENDPOINT_PORT=${WIREGUARD_ENDPOINT_PORT}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
+      - FIREWALL_INPUT_PORTS=${GLUETUN_FIREWALL_INPUT_PORTS}
+      - FIREWALL_VPN_INPUT_PORTS=${AIRVPN_FORWARDED_PORT}
+    volumes:
+      - ./gluetun:/gluetun
+    ports:
+      - ${TRANSMISSION_HOST_SEED_PORT}:${AIRVPN_FORWARDED_PORT}/tcp
+      - ${TRANSMISSION_HOST_SEED_PORT}:${AIRVPN_FORWARDED_PORT}/udp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider --timeout=5 https://1.1.1.1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  tailscale-transmission:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-transmission
+    hostname: transmission
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY_TRANSMISSION}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    configs:
+      - source: ts-serve-transmission
+        target: /config/serve.json
+    volumes:
+      - ./ts/transmission/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  tailscale-mullvad:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-mullvad
+    hostname: mullvad
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY_MULLVAD}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    configs:
+      - source: ts-serve-mullvad
+        target: /config/serve.json
+    volumes:
+      - ./ts/mullvad/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  transmission:
+    image: ${TRANSMISSION_IMAGE_URL}
+    container_name: transmission
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - USER=${TRANSMISSION_USER}
+      - PASS=${TRANSMISSION_PASS}
+    volumes:
+      - ./transmission/data:/config
+      - ./transmission/watch:/watch
+      - /srv/mergerfs/data/root/downloads:/downloads
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    network_mode: "service:gluetun"
+    restart: unless-stopped
+
+  mullvad-browser:
+    image: ${MULLVAD_IMAGE_URL}
+    container_name: mullvad-browser
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - CUSTOM_USER=${MULLVAD_USER}
+      - PASSWORD=${MULLVAD_PASS}
+      - CUSTOM_PORT=${MULLVAD_SERVICEPORT}
+    volumes:
+      - ./mullvad-browser/config:/config
+      - /srv/mergerfs/data/root/downloads:/downloads
+    shm_size: "1gb"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    network_mode: "service:gluetun"
+    restart: unless-stopped

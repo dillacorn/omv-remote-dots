@@ -12,14 +12,9 @@ Before starting, follow this visual guide to properly configure your AirVPN sett
 
 ---
 
-## ⚙️ 2. Configure `compose.yml`
+## ⚙️ 2. Configure `.env`
 
-Edit your `compose.yml` file based on the AirVPN example (recommended for privacy):
-
-📄 [compose_example_airvpn.yml](https://github.com/dillacorn/deb-omv-dots/blob/main/docker_compose_examples/privacy/compose_example_airvpn.yml)
-
-This service expects TLS certs to be mounted into the container. Use an **absolute path** on your host. Details and folder layout:  
-[deb-omv-dots/docker/tailscale-certs](https://github.com/dillacorn/deb-omv-dots/tree/main/docker/tailscale-certs)
+Edit your `.env` file based on the AirVPN example (recommended for privacy):
 
 ---
 
@@ -41,21 +36,11 @@ sudo docker compose up -d
 ## 🌍 4. Access Web Interfaces
 
 - 📦 **Transmission**  
-  Visit: `https://localhost:6091/transmission/`
+  Visit: `https://transmission.MagicDNS-example.ts.net`
 
 - 🔐 **Mullvad Browser (via noVNC)**  
-  Visit: `https://localhost:6901/browser/`
-
-> Replace `localhost` with your server's IP if accessing remotely.
-
-or with tailscale (just an example)
-
-- 📦 **Transmission**  
-  Visit: `https://MACHINE.MagicDNS-example.ts.net:6091/transmission/`
-
-- 🔐 **Mullvad Browser (via noVNC)**  
-  Visit: `https://MACHINE.MagicDNS-example.ts.net:6901/browser/`
-
+  Visit: `https://mullvad.MagicDNS-example.ts.net`
+`
 ---
 
 ## 🧭 5. Configure Transmission Application
