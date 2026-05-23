@@ -1,31 +1,70 @@
+configs:
+  ts-serve:
+    content: |
+      {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://127.0.0.1:${SERVICEPORT}"
+              }
+            }
+          }
+        },
+        "AllowFunnel": {
+          "$${TS_CERT_DOMAIN}:443": false
+        }
+      }
+
 services:
-  dockge:
-    image: louislam/dockge:1
-    container_name: dockge
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-${SERVICE}
+    hostname: ${SERVICE}
     environment:
-      TZ: America/New_York
-      DOCKGE_STACKS_DIR: /docker
-    ports:
-      - "8090:5001" # optional: plain HTTP access
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    configs:
+      - source: ts-serve
+        target: /config/serve.json
+    volumes:
+      - ./config:/config
+      - ./ts/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  dockge:
+    image: ${IMAGE_URL}
+    container_name: app-${SERVICE}
+    network_mode: service:tailscale
+    environment:
+      - TZ=${TZ}
+      - DOCKGE_STACKS_DIR=${DOCKGE_STACKS_DIR}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
-      - /docker:/docker
-    restart: unless-stopped
-
-  nginx:
-    image: nginx:alpine
-    container_name: nginx-dockge
+      - ${DOCKGE_STACKS_DIR}:${DOCKGE_STACKS_DIR}
     depends_on:
-      - dockge
-    ports:
-      - "8091:8091" # HTTPS
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
-      - /docker/tailscale-certs:/etc/nginx/certs:ro
+      tailscale:
+        condition: service_healthy
     restart: unless-stopped
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /var/tmp

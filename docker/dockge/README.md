@@ -1,10 +1,17 @@
-## How to access
-Your tailscale magicDNS address
+## Access
+Open the service in a browser using its Tailscale address:
 
-example:
-https://MACHINE.MagicDNS-example.ts.net:8091
+https://<service>.<your-tailnet>.ts.net
 
-## ⚙️ Configure `compose.yml` for Tailscale certs
+Example:
+https://dockge.time-puffin.ts.net
 
-This service expects TLS certs to be mounted into the container. Use an **absolute path** on your host. Details and folder layout:  
-[deb-omv-dots/docker/tailscale-certs](https://github.com/dillacorn/deb-omv-dots/tree/main/docker/tailscale-certs)
+## Export certs
+Only needed for local reverse proxy setups.
+
+```bash
+docker exec -it tailscale-<service> tailscale cert <service>.<your-tailnet>.ts.net
+```
+
+Example:
+docker exec -it tailscale-dockge tailscale cert dockge.time-puffin.ts.net
