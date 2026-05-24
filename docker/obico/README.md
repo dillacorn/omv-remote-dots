@@ -2,4 +2,4 @@
 Your tailscale magicDNS address
 
 example:
-http://obico.MagicDNS-example.ts.net:3334
+https://obico.MagicDNS-example.ts.net

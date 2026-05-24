@@ -16,6 +16,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     ports:
       - "3334:3334"
     networks:
