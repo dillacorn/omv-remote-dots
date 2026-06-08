@@ -53,13 +53,20 @@ services:
 
   dnsproxy:
     image: adguard/dnsproxy:latest
-    container_name: dnsproxy-nextdns
+    container_name: dnsproxy-quad9
     network_mode: "service:pihole"
     command:
       - "--listen=127.0.0.1"
       - "--port=5053"
-      - "--bootstrap=1.1.1.1:53"
+
+      # Upstream DNS:
+      - "--upstream=https://dns.quad9.net/dns-query"
+      # - "--upstream=https://dns.nextdns.io/REDACTED_ID"
+
+      # Bootstrap DNS used to resolve DoH upstream hostnames.
       - "--bootstrap=9.9.9.9:53"
+      - "--bootstrap=149.112.112.112:53"
+      - "--bootstrap=2620:fe::fe:53"
     restart: unless-stopped
 
   nginx:
