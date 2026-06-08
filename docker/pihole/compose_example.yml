@@ -15,20 +15,37 @@ services:
         192.168.68.2 brave.time-puffin.ts.net
         192.168.68.2 audiobookshelf.time-puffin.ts.net
         192.168.68.2 ntfy.time-puffin.ts.net
-        192.168.68.118 qidi.time-puffin.ts.net
-        192.168.68.86 k1.time-puffin.ts.net
+        192.168.68.2 obico.time-puffin.ts.net
         192.168.68.2 immich.time-puffin.ts.net
         192.168.68.2 vaultwarden.time-puffin.ts.net
         192.168.68.2 mullvad.time-puffin.ts.net
         192.168.68.2 transmission.time-puffin.ts.net
         192.168.68.2 dockge.time-puffin.ts.net
-        192.168.68.2 obico.time-puffin.ts.net
+
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 omv.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 flame.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 jellyfin.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 jellyseerr.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 brave.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 audiobookshelf.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 ntfy.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 obico.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 immich.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 vaultwarden.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 mullvad.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 transmission.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 dockge.time-puffin.ts.net
+
+        192.168.68.118 qidi.time-puffin.ts.net
+        192.168.68.86 k1.time-puffin.ts.net
       PIHOLE_UID: "1000"
       PIHOLE_GID: "1000"
     ports:
-      - 192.168.68.2:53:53/tcp
-      - 192.168.68.2:53:53/udp
-      - 8088:80/tcp
+      - "192.168.68.2:53:53/tcp"
+      - "192.168.68.2:53:53/udp"
+      - "[2600:1700:2920:1760:aa5e:45ff:fecf:3c47]:53:53/tcp"
+      - "[2600:1700:2920:1760:aa5e:45ff:fecf:3c47]:53:53/udp"
+      - "8088:80/tcp"
     volumes:
       - ./etc-pihole:/etc/pihole
       - ./etc-dnsmasq.d:/etc/dnsmasq.d
@@ -51,8 +68,9 @@ services:
     depends_on:
       - pihole
     ports:
-      - 8089:8089
-      - 443:443
+      - "192.168.68.2:443:443/tcp"
+      - "[2600:1700:2920:1760:aa5e:45ff:fecf:3c47]:443:443/tcp"
+      - "8089:8089/tcp"
     volumes:
       - ./conf.d:/etc/nginx/conf.d:ro
       - /docker/tailscale-certs:/etc/nginx/omv-certs:ro
