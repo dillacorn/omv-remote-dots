@@ -10,23 +10,20 @@ services:
     environment:
       TZ: ${TZ:-America/New_York}
 
-      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_AUTH_ONCE: "true"
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
-
-      # Kernel networking is preferable for sustained video traffic.
       TS_USERSPACE: "false"
 
       TS_ENABLE_HEALTH_CHECK: "true"
       TS_LOCAL_ADDR_PORT: 127.0.0.1:41234
 
-      # Optional. Leave blank unless your ACL requires a device tag.
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
 
     volumes:
-      - ${TS_STATE_PATH:-./tailscale/state}:/var/lib/tailscale
-      - ${TS_CONFIG_PATH:-./tailscale/config}:/config:ro
+      - ${TS_STATE_PATH:-./ts/state}:/var/lib/tailscale
+      - ${TS_CONFIG_PATH:-./ts/config}:/config:ro
 
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -35,7 +32,6 @@ services:
       - NET_ADMIN
       - SYS_MODULE
 
-    # Preserve direct LAN access through the OMV host.
     ports:
       - "${OWNCAST_LAN_WEB_PORT:-1930}:8080/tcp"
       - "${OWNCAST_LAN_RTMP_PORT:-1935}:1935/tcp"
@@ -56,7 +52,6 @@ services:
     container_name: ${OWNCAST_CONTAINER_NAME:-owncast}
     restart: unless-stopped
 
-    # Owncast and Tailscale share the same network namespace.
     network_mode: service:tailscale
 
     depends_on:
@@ -65,11 +60,9 @@ services:
 
     environment:
       TZ: ${TZ:-America/New_York}
-      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
-      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility,video}
 
     volumes:
       - ${OWNCAST_DATA_PATH:-./data}:/owncast/data
-      - ${OWNCAST_FFMPEG_PATH:-./ffmpeg}:/usr/local/bin/ffmpeg:ro
 
-    runtime: nvidia
+    devices:
+      - /dev/dri:/dev/dri

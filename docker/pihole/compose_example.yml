@@ -21,6 +21,7 @@ services:
         192.168.68.2 mullvad.time-puffin.ts.net
         192.168.68.2 transmission.time-puffin.ts.net
         192.168.68.2 dockge.time-puffin.ts.net
+        192.168.68.2 owncast.time-puffin.ts.net
 
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 omv.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 flame.time-puffin.ts.net
@@ -35,6 +36,7 @@ services:
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 mullvad.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 transmission.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 dockge.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 owncast.time-puffin.ts.net
 
         192.168.68.118 qidi.time-puffin.ts.net
         192.168.68.86 k1.time-puffin.ts.net
@@ -93,6 +95,7 @@ services:
       - /docker/privacy/ts/transmission/state/certs:/etc/nginx/transmission-certs:ro
       - /docker/dockge/ts/state/certs:/etc/nginx/dockge-certs:ro
       - /docker/obico/ts/state/certs:/etc/nginx/obico-certs:ro
+      - /docker/owncast/ts/state/certs:/etc/nginx/owncast-certs:ro
     restart: unless-stopped
     read_only: true
     tmpfs:
