@@ -1,23 +1,41 @@
-## How to access
-Your tailscale magicDNS address
+## Setup
 
-example:
-https://MACHINE.MagicDNS-example.ts.net:5015
+Rename the example files and add a Tailscale auth key:
 
---
+```bash
+mv compose_example.yml compose.yml
+cp .env_example .env
+```
 
-I use "Capy Reader" on android. ~ IMO the best currently.
+Set `TS_AUTHKEY` in `.env`, then start the stack:
 
-for desktop I like the FreshRSS web interface.
+```bash
+docker compose up -d
+```
 
-Install your extensions.. I'm currently using the following:
-      - Colorful list
-      - Sticky Feeds
-      - Title-Wrap
-      - YouTube Video Feed (adjust video size to 1280x720)
+FreshRSS uses its persistent SQLite database under `./data`; MariaDB is not required.
 
-## ⚙️ Configure `compose.yml` for Tailscale certs
+## Access
 
-This service expects TLS certs to be mounted into the container. Use an **absolute path** on your host. Details and folder layout:  
-[deb-omv-dots/docker/tailscale-certs](https://github.com/dillacorn/deb-omv-dots/tree/main/docker/tailscale-certs)
+Tailscale:
 
+```text
+https://freshrss.<your-tailnet>.ts.net
+```
+
+Direct LAN port:
+
+```text
+http://<server-ip>:5015
+```
+
+The Pi-hole example in this repo can provide the same HTTPS hostname on LAN.
+
+I use Capy Reader on Android and the FreshRSS web interface on desktop.
+
+Extensions I currently use:
+
+- Colorful list
+- Sticky Feeds
+- Title-Wrap
+- YouTube Video Feed
