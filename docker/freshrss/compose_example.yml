@@ -1,25 +1,14 @@
 # change file name to "compose.yml" in order to use
 # command: mv compose_example.yml compose.yml
 
-volumes:
-  data:
-  extensions:
-
 services:
   freshrss:
     image: freshrss/freshrss:latest
     container_name: freshrss
     hostname: freshrss
     restart: unless-stopped
-    depends_on:
-      - mariadb_freshrss
     environment:
       TZ: Etc/UTC
-      DB_TYPE: "mysql"
-      DB_HOST: "mariadb_freshrss"
-      DB_USER: "______" # provide Username
-      DB_PASSWORD: "______" # provide Password
-      DB_NAME: "freshrss"
 #      CRON_MIN: "25,55" # updates every 25th minute and the 55th minute of every hour
     volumes:
       - ./data:/var/www/FreshRSS/data
@@ -27,19 +16,6 @@ services:
     logging:
       options:
         max-size: 10m
-
-  mariadb_freshrss:
-    image: mariadb:latest
-    container_name: mariadb_freshrss
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: "_______" # provide Password
-      MYSQL_DATABASE: "freshrss"
-      MYSQL_USER: "_______" # provide Username
-      MYSQL_PASSWORD: "_______" # provide Password
-    volumes:
-      - ./mariadb:/var/lib/mysql
-    command: --innodb-buffer-pool-size=512M --max-connections=200
 
   nginx:
     image: nginx:alpine
