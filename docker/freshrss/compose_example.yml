@@ -1,14 +1,70 @@
 # change file name to "compose.yml" in order to use
 # command: mv compose_example.yml compose.yml
 
+configs:
+  ts-serve:
+    content: |
+      {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://127.0.0.1:${SERVICEPORT}"
+              }
+            }
+          }
+        },
+        "AllowFunnel": {
+          "$${TS_CERT_DOMAIN}:443": false
+        }
+      }
+
 services:
-  freshrss:
-    image: freshrss/freshrss:latest
-    container_name: freshrss
-    hostname: freshrss
-    restart: unless-stopped
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-${SERVICE}
+    hostname: ${SERVICE}
     environment:
-      TZ: Etc/UTC
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    configs:
+      - source: ts-serve
+        target: /config/serve.json
+    volumes:
+      - ./config:/config
+      - ./ts/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    ports:
+      - "${LAN_PORT}:${SERVICEPORT}/tcp"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  freshrss:
+    image: ${IMAGE_URL}
+    container_name: ${SERVICE}
+    hostname: ${SERVICE}
+    network_mode: "service:tailscale"
+    environment:
+      TZ: ${TZ}
 #      CRON_MIN: "25,55" # updates every 25th minute and the 55th minute of every hour
     volumes:
       - ./data:/var/www/FreshRSS/data
@@ -16,20 +72,7 @@ services:
     logging:
       options:
         max-size: 10m
-
-  nginx:
-    image: nginx:alpine
-    container_name: nginx-freshrss
-    restart: unless-stopped
     depends_on:
-      - freshrss
-    ports:
-      - "5015:5015"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
-      - /docker/tailscale-certs:/etc/nginx/certs:ro # absolute path
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /var/tmp
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
