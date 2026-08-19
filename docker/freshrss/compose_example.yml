@@ -61,7 +61,6 @@ services:
   freshrss:
     image: ${IMAGE_URL}
     container_name: ${SERVICE}
-    hostname: ${SERVICE}
     network_mode: "service:tailscale"
     environment:
       TZ: ${TZ}
