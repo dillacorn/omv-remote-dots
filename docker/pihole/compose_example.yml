@@ -10,6 +10,7 @@ services:
       FTLCONF_dns_hosts: |-
         192.168.68.2 omv.time-puffin.ts.net
         192.168.68.2 flame.time-puffin.ts.net
+        192.168.68.2 freshrss.time-puffin.ts.net
         192.168.68.2 jellyfin.time-puffin.ts.net
         192.168.68.2 jellyseerr.time-puffin.ts.net
         192.168.68.2 brave.time-puffin.ts.net
@@ -25,6 +26,7 @@ services:
 
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 omv.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 flame.time-puffin.ts.net
+        2600:1700:2920:1760:aa5e:45ff:fecf:3c47 freshrss.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 jellyfin.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 jellyseerr.time-puffin.ts.net
         2600:1700:2920:1760:aa5e:45ff:fecf:3c47 brave.time-puffin.ts.net
@@ -84,6 +86,7 @@ services:
       - ./conf.d:/etc/nginx/conf.d:ro
       - /docker/tailscale-certs:/etc/nginx/omv-certs:ro
       - /docker/flame/ts/state/certs:/etc/nginx/flame-certs:ro
+      - /docker/freshrss/ts/state/certs:/etc/nginx/freshrss-certs:ro
       - /docker/jellyfin/ts/state/certs:/etc/nginx/jellyfin-certs:ro
       - /docker/jellyseerr/ts/state/certs:/etc/nginx/jellyseerr-certs:ro
       - /docker/brave/ts/state/certs:/etc/nginx/brave-certs:ro
