@@ -15,7 +15,7 @@ service.example-tailnet.ts.net
   -> application HTTP port
 ```
 
-Remote Tailscale clients continue using the application's Tailscale Serve sidecar normally.
+Remote Tailscale clients continue using each service's normal remote path. Most services use a Tailscale Serve sidecar. Obico is intentionally different: its web app shares the Tailscale container's network namespace and is reached locally on port `3334` without requiring Tailscale Serve.
 
 The important rule is that `nginx-pihole` must **not** proxy LAN traffic back to a Tailscale `100.x` address. Doing that makes the local path depend on the Tailscale overlay even though DNS already resolved locally.
 
@@ -78,6 +78,7 @@ The shared `00-docker-resolver.conf` uses Docker's embedded DNS and the per-serv
 | Immich | `tailscale-immich:2283` |
 | Jellyfin | `tailscale-jellyfin:8096` |
 | Jellyseerr | `tailscale-jellyseerr:5055` |
+| Karakeep | `tailscale-karakeep:3000` |
 | ntfy | `tailscale-ntfy:80` |
 | Obico | `tailscale-obico:3334` |
 | Owncast | `owncast-tailscale:8080` |
@@ -86,6 +87,8 @@ The shared `00-docker-resolver.conf` uses Docker's embedded DNS and the per-serv
 | Vaultwarden | `tailscale-vaultwarden:80` |
 
 Transmission and Mullvad Browser share Gluetun's network namespace, so their LAN proxy target is `gluetun` rather than their Tailscale sidecars.
+
+Obico does not need a Tailscale Serve handler for the local path. Its web process listens on port `3334` in the same network namespace as `tailscale-obico`, so `nginx-pihole` can reach `tailscale-obico:3334` directly over `local-webapps`.
 
 ## HTTPS certificates
 
@@ -110,4 +113,12 @@ dig @192.168.1.10 jellyfin.example-tailnet.ts.net A +short
 
 It should return the LAN server IP, not a Tailscale `100.x` address.
 
-Then verify the HTTPS URL normally from a LAN client.
+Then force the HTTPS request through the LAN IP to prove the proxy path is local:
+
+```bash
+curl -k \
+    --resolve jellyfin.example-tailnet.ts.net:443:192.168.1.10 \
+    https://jellyfin.example-tailnet.ts.net/
+```
+
+A real application response proves Nginx reached the local Docker backend. `502`, `503`, and `504` indicate the local backend path is not working.
