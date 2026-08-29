@@ -1,19 +1,81 @@
 # change file name to "compose.yml" in order to use
 # command: mv compose_example.yml compose.yml
 
+configs:
+  ts-serve:
+    content: |
+      {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://127.0.0.1:3000"
+              }
+            }
+          }
+        },
+        "AllowFunnel": {
+          "$${TS_CERT_DOMAIN}:443": false
+        }
+      }
+
 services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-karakeep
+    hostname: karakeep
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:41234
+      - TS_AUTH_ONCE=true
+    configs:
+      - source: ts-serve
+        target: /config/serve.json
+    volumes:
+      - ./config:/config
+      - ./ts/state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
   web:
     image: ghcr.io/karakeep-app/karakeep:${KARAKEEP_VERSION:-release}
+    network_mode: service:tailscale
     restart: unless-stopped
     volumes:
       - ./data:/data
     environment:
       MEILI_ADDR: http://meilisearch:7700
       BROWSER_WEB_URL: http://chrome:9222
-      DATA_DIR: /data # DON'T CHANGE THIS
-      MEILI_MASTER_KEY: "____"               # Generate key (see below)
-      NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: "____"                # Generate key (see below)
+      DATA_DIR: /data
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      chrome:
+        condition: service_started
+      meilisearch:
+        condition: service_started
 
   chrome:
     image: gcr.io/zenika-hub/alpine-chrome:123
@@ -31,26 +93,9 @@ services:
     restart: unless-stopped
     environment:
       MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
     volumes:
       - meilisearch:/meili_data
 
-  nginx:
-    image: nginx:alpine
-    container_name: nginx-karakeep
-    restart: unless-stopped
-    ports:
-      - "5010:5010" # choose port (both)
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
-      - /docker/tailscale-certs:/etc/nginx/certs:ro # absolute path
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /var/tmp
-
 volumes:
   meilisearch:
-  data:
-
-# generate keys command = openssl read -base64 36
