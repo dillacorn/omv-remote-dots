@@ -1,0 +1,13 @@
+# Optional LAN-only backend path for Pi-hole/Nginx.
+# The base Obico Compose file already connects Tailscale to the `obico` network;
+# Compose appends this shared network when the files are merged.
+
+services:
+  tailscale:
+    networks:
+      - local-webapps
+
+networks:
+  local-webapps:
+    external: true
+    name: local-webapps

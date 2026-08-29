@@ -1,0 +1,13 @@
+# Optional LAN-only backend path for Pi-hole/Nginx.
+# Transmission and Mullvad Browser share Gluetun's network namespace.
+
+services:
+  gluetun:
+    networks:
+      - default
+      - local-webapps
+
+networks:
+  local-webapps:
+    external: true
+    name: local-webapps
