@@ -10,11 +10,11 @@ services:
     # Default: check every 6 hours.
     command: --interval 21600 watchtower brave tailscale-brave app-flame tailscale-flame mumble-web nginx-mumbleweb freshrss tailscale-freshrss app-ntfy tailscale-ntfy hbbs hbbr vaultwarden nginx-vaultwarden jellyfin tailscale-jellyfin jellyseerr mariadb_jellyseerr tailscale-jellyseerr gluetun transmission mullvad-browser audiobookshelf tailscale-audiobookshelf app-dockge tailscale-dockge
 
-    # Optional for servers that run 24/7: restrict automatic updates to 4:00 AM
+    # Optional for servers that run 24/7: restrict automatic updates to 2:45 AM
     # in the timezone configured below, reducing the chance of interrupting active sessions.
     # Watchtower allows either --interval or --schedule, not both.
     # To enable this, comment out the command above and uncomment the command below.
-    # command: --schedule "0 0 4 * * *" watchtower brave tailscale-brave app-flame tailscale-flame mumble-web nginx-mumbleweb freshrss tailscale-freshrss app-ntfy tailscale-ntfy hbbs hbbr vaultwarden nginx-vaultwarden jellyfin tailscale-jellyfin jellyseerr mariadb_jellyseerr tailscale-jellyseerr gluetun transmission mullvad-browser audiobookshelf tailscale-audiobookshelf app-dockge tailscale-dockge
+    # command: --schedule "0 45 2 * * *" watchtower brave tailscale-brave app-flame tailscale-flame mumble-web nginx-mumbleweb freshrss tailscale-freshrss app-ntfy tailscale-ntfy hbbs hbbr vaultwarden nginx-vaultwarden jellyfin tailscale-jellyfin jellyseerr mariadb_jellyseerr tailscale-jellyseerr gluetun transmission mullvad-browser audiobookshelf tailscale-audiobookshelf app-dockge tailscale-dockge
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
