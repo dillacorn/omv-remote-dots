@@ -24,4 +24,5 @@ gen.php
 *.metadata-v2
 pg_filenode.map
 2840_vm
+compose.override.yml
 ```
