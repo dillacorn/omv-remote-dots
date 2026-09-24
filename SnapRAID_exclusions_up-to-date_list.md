@@ -15,7 +15,7 @@
 .config
 /*.db
 /gen.php
-*db-wal
+*.db-wal
 jellyfin.db-wal
 gen.php
 /*.metadata-v2
@@ -24,5 +24,7 @@ gen.php
 *.metadata-v2
 pg_filenode.map
 2840_vm
+220062
+tailscaled.log*.txt
 compose.override.yml
 ```
