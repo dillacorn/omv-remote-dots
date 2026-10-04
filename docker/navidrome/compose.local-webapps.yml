@@ -1,0 +1,17 @@
+# Optional LAN-only backend path for Pi-hole/Nginx.
+# Create the shared network once:
+#   docker network create local-webapps
+#
+# Use with:
+#   docker compose -f compose.yml -f compose.local-webapps.yml up -d
+
+services:
+  tailscale:
+    networks:
+      - default
+      - local-webapps
+
+networks:
+  local-webapps:
+    external: true
+    name: local-webapps
