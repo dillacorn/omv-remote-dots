@@ -77,6 +77,7 @@ The shared `00-docker-resolver.conf` uses Docker's embedded DNS and the per-serv
 | FreshRSS | `tailscale-freshrss:80` |
 | Immich | `tailscale-immich:2283` |
 | Jellyfin | `tailscale-jellyfin:8096` |
+| Navidrome | `tailscale-navidrome:4533` |
 | Jellyseerr | `tailscale-jellyseerr:5055` |
 | Karakeep | `tailscale-karakeep:3000` |
 | ntfy | `tailscale-ntfy:80` |
