@@ -85,9 +85,9 @@ Edit and apply a profile:
 /docker/pihole/pihole-profile-manager apply "Home Router" --gravity
 ```
 
-In the TUI, **Apply Pi-hole policy** synchronizes the profile definition into Pi-hole: group description, selected list-to-group assignments, allow/deny regex rules, blocked TLDs, client assignments, and the configured proxy Docker IP. It creates a timestamped SQLite backup first, then reloads DNS. It does **not** redownload blocklists.
+In the TUI, **Sync to Pi-hole** synchronizes the profile definition into Pi-hole: group description, selected list-to-group assignments, allow/deny regex rules, blocked TLDs, client assignments, and the configured Arachnidium proxy Docker IP. It creates a timestamped SQLite backup first, then reloads DNS. It does **not** redownload blocklist contents.
 
-**Apply + Gravity** performs the same policy sync and then runs a full Pi-hole Gravity rebuild/download. Use it after changing selected blocklists or when you explicitly want to refresh list contents.
+**Sync + refresh lists** performs the same policy sync and then runs a full Pi-hole Gravity rebuild/download. Use it after changing selected blocklists or when you explicitly want to fetch the latest contents from all enabled blocklist URLs.
 
 Create a new profile from a preset:
 
@@ -168,7 +168,9 @@ The manager converts allow/deny domains and TLDs into Pi-hole regex rules that a
 
 ## Daily blocklist updates
 
-Install a persistent daily Gravity timer. Default run time is 03:15 with a randomized delay of up to 20 minutes:
+Pi-hole does not continuously stream changes from the configured list URLs. Gravity fetches the current contents when a Gravity rebuild runs.
+
+For predictable daily updates, enable the persistent daily Gravity timer from **pihm -> Maintenance -> Enable daily blocklist updates**. The default run time is 03:15 with a randomized delay of up to 20 minutes:
 
 ```bash
 /docker/pihole/pihole-profile-manager timer install
@@ -226,7 +228,7 @@ Guest                               [no proxy]
 
 A configured port is metadata until the matching Arachnidium container is actually deployed and running. The connection-info screen reports that runtime state explicitly.
 
-Inside a profile, open **Proxy endpoint**. `pihm` can allocate the next recommended pair automatically, starting at host port `18101` and Docker IP `172.30.53.101`. The **Proxy endpoints** screen then shows the hostname, LAN address, Tailscale address, port, Docker IP, and whether the matching Arachnidium container is running.
+Inside a profile, open **Arachnidium proxy**. `pihm` can allocate the next recommended pair automatically, starting at host port `18101` and Docker IP `172.30.53.101`. Configuring this pair only records the planned endpoint; it does not by itself deploy or start Arachnidium. The **Proxy endpoints** screen then shows the hostname, LAN address, Tailscale address, port, Docker IP, and whether the matching Arachnidium container is running.
 
 CLI equivalents are also available:
 
