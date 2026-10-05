@@ -210,11 +210,11 @@ def edit_lists(path):
 
 def apply(path,gravity=False):
     p=M["load"](path,CAT)
-    action="Apply + Gravity" if gravity else "Apply Pi-hole policy"
+    action="Sync + refresh lists" if gravity else "Sync to Pi-hole"
     detail=(
-        "This writes the profile's group settings, selected list assignments, allow/deny rules, "
-        "blocked TLDs, clients, and configured proxy IP into Pi-hole. "
-        + ("It also downloads/rebuilds all Gravity blocklists." if gravity else "It reloads DNS without redownloading Gravity lists.")
+        "This writes the profile's description, selected list assignments, allow/deny rules, "
+        "blocked TLDs, clients, and configured Arachnidium proxy IP into live Pi-hole. "
+        + ("It then downloads the latest contents from every enabled blocklist URL and rebuilds Gravity." if gravity else "It reloads DNS without downloading blocklist contents.")
     )
     if not confirm(f"{action} for {p['name']}?\n\n{detail}"):
         return
@@ -272,8 +272,21 @@ def profile_editor(path):
     while True:
         p=M["load"](path,CAT)
         proxy=f":{p['proxy_port']}  {p['proxy_ip']} (configured)" if p["proxy_enabled"] else "Not configured"
-        items=[f"Description          {p['description']}",f"Blocklists selected  {len(p['keys'])}",f"Allow domains        {len(p['allow'])}",f"Deny domains         {len(p['deny'])}",f"Blocked TLDs         {len(p['tlds'])}",f"Clients              {len(p['clients'])}",f"Proxy endpoint       {proxy}","Apply Pi-hole policy sync rules/clients","Apply + Gravity      sync + rebuild blocklists","Clone profile","View raw INI","Back"]
-        sub="Profile-file edits save immediately. Pi-hole changes only on Apply."
+        items=[
+            f"Description          {p['description']}",
+            f"Blocklists selected  {len(p['keys'])}",
+            f"Allow domains        {len(p['allow'])}",
+            f"Deny domains         {len(p['deny'])}",
+            f"Blocked TLDs         {len(p['tlds'])}",
+            f"Clients              {len(p['clients'])}",
+            f"Arachnidium proxy    {proxy}",
+            "Sync to Pi-hole       rules / clients / list assignments",
+            "Sync + refresh lists  download latest blocklists",
+            "Clone profile",
+            "View raw INI",
+            "Back",
+        ]
+        sub="Profile edits save to the INI immediately. Use Sync to write them into live Pi-hole."
         if p["proxy_enabled"]: sub+=f"  Proxy port: {p['proxy_port']}"
         c=menu(f"Profile: {p['name']}",items,sub)
         if c is None or c==11: return
@@ -435,11 +448,11 @@ def proxy_editor(path):
         p=M["load"](path,CAT)
         if not p["proxy_enabled"]:
             port,ip=next_proxy_slot(path)
-            c=menu("Proxy endpoint",[
+            c=menu("Arachnidium proxy",[
                 f"Configure recommended :{port} / {ip}",
                 "Configure manually",
                 "Back",
-            ],f"{p['name']} is a Pi-hole policy only until a proxy endpoint is configured and deployed.")
+            ],f"{p['name']} has no Arachnidium endpoint. Configuring one reserves a port/IP; it does not deploy the container.")
             if c is None or c==2: return
             if c==0:
                 try: save_proxy(path,True,port,ip,f"arachnidium-{M['slug'](p['name'])}")
@@ -454,14 +467,14 @@ def proxy_editor(path):
             continue
 
         label=p["proxy_label"] or f"arachnidium-{M['slug'](p['name'])}"
-        c=menu("Proxy endpoint",[
+        c=menu("Arachnidium proxy",[
             f"Connection info      :{p['proxy_port']}",
             f"Change port          {p['proxy_port']}",
             f"Change Docker IP     {p['proxy_ip']}",
-            f"Container label      {label}",
+            f"Container name       {label} (advanced)",
             "Disable proxy",
             "Back",
-        ],f"{p['name']} -> port {p['proxy_port']} -> {p['proxy_ip']}")
+        ],f"{p['name']} -> port {p['proxy_port']} -> {p['proxy_ip']}  (configuration only until deployed)")
         if c is None or c==5: return
         if c==0: show_text("Proxy connection",proxy_connection_text(p))
         elif c==1:
@@ -485,13 +498,13 @@ def proxy_editor(path):
 
 def maintenance():
     while True:
-        c=menu("Maintenance",["Show group status","Run Gravity now","Install daily Gravity timer","Show timer status","Remove timer","Capture current groups","Back"])
+        c=menu("Maintenance",["Show group status","Refresh blocklists now","Enable daily blocklist updates","Show blocklist-update timer","Disable daily blocklist updates","Capture current groups","Back"])
         if c is None or c==6: return
         if c==0: external("Group status",M["status"])
-        elif c==1: external("Gravity update",lambda:M["reload"](True))
-        elif c==2: external("Install timer",lambda:M["timer"]("install","*-*-* 03:15:00"))
-        elif c==3: external("Timer status",lambda:M["timer"]("status","*-*-* 03:15:00"))
-        elif c==4 and confirm("Remove the daily Gravity timer?"): external("Remove timer",lambda:M["timer"]("remove","*-*-* 03:15:00"))
+        elif c==1: external("Refresh blocklists",lambda:M["reload"](True))
+        elif c==2: external("Enable daily blocklist updates",lambda:M["timer"]("install","*-*-* 03:15:00"))
+        elif c==3: external("Blocklist-update timer",lambda:M["timer"]("status","*-*-* 03:15:00"))
+        elif c==4 and confirm("Disable automatic daily blocklist updates?"): external("Disable daily blocklist updates",lambda:M["timer"]("remove","*-*-* 03:15:00"))
         elif c==5: capture_groups()
 
 
@@ -515,15 +528,15 @@ def proxy_screen():
             except BaseException:
                 continue
         items=[
-            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}  configured" if p["proxy_enabled"] else "[no proxy - Enter to configure]")
+            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}  configured" if p["proxy_enabled"] else "[no Arachnidium proxy]")
             for p in ps
         ]+["Back"]
-        c=menu("Proxy endpoints",items,"Every Pi-hole profile is listed. [no proxy] means no Arachnidium endpoint is configured yet.",min(pos,len(items)-1))
+        c=menu("Arachnidium proxies",items,"A configured port/IP is only the planned endpoint until its Arachnidium container is deployed.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
         p=ps[c]
         if p["proxy_enabled"]:
-            x=menu("Proxy endpoint",["Connection info","Edit / disable proxy","Back"],f"{p['name']} -> :{p['proxy_port']}")
+            x=menu("Arachnidium proxy",["Connection info","Edit / disable configuration","Back"],f"{p['name']} -> :{p['proxy_port']}")
             if x==0: show_text("Proxy connection",proxy_connection_text(p))
             elif x==1: proxy_editor(p["path"])
         else:
@@ -571,14 +584,21 @@ def help_screen():
   q or Esc          Back
   PgUp/PgDn         Scroll
 
-Recommended workflow
+How this works
 
-  1. Profiles -> Import current Pi-hole groups (once on an existing install).
-  2. Open a profile and toggle lists / edit allow, deny, TLD, and client entries.
-  3. Apply Pi-hole policy after changing rules, clients, or proxy settings.
-  4. Use Apply + Gravity when selected blocklists changed and need downloading.
-  5. Open Proxy endpoint inside a profile to assign its port and Docker IP.
-  6. A profile marked [no proxy] is only a Pi-hole policy until you configure and deploy an Arachnidium endpoint for it.
+  Profile INI = saved configuration in /docker/pihole/profiles.d.
+  Sync to Pi-hole = write that profile configuration into live Pi-hole and reload DNS.
+  Sync + refresh lists = same sync, then download current blocklist contents and rebuild Gravity.
+  Blocklists do not stream/update continuously; Gravity must run to fetch newer URL contents.
+  Maintenance can enable a daily Gravity/blocklist-update timer.
+
+Arachnidium
+
+  A Pi-hole profile does not need a proxy.
+  Configuring an Arachnidium proxy reserves a host port and private Docker IP for that profile.
+  "Configured" does NOT mean the Arachnidium container is deployed/running.
+  A client uses Arachnidium only when that client/browser is explicitly configured to use the proxy.
+  Turning the client proxy setting back to None/Off bypasses Arachnidium while Pi-hole DNS filtering still works.
 
 Files
 
@@ -596,7 +616,7 @@ def main():
     if not sys.stdin.isatty() or not sys.stdout.isatty(): print("ERROR: interactive terminal required",file=sys.stderr); return 2
     M["PROFILES"].mkdir(parents=True,exist_ok=True)
     while True:
-        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / apply","Proxy endpoints     LAN + Tailscale connection info","Maintenance         Gravity / timer / import","Update pihm         fetch latest from main","Help","Quit"],"Arrow-key TUI inspired by smtty/Awtarchy navigation")
+        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / sync","Arachnidium proxies configure / connection info","Maintenance         blocklist updates / status","Update pihm         fetch latest from main","Help","Quit"],"Arrow-key TUI inspired by smtty/Awtarchy navigation")
         if c is None or c==5: clear(); return 0
         if c==0: profiles_menu()
         elif c==1: proxy_screen()
