@@ -190,8 +190,44 @@ def _rfc1918_ipv4(value):
 
 def _norm_device_name(value):
     value=(value or "").strip().rstrip(".").split(".",1)[0].casefold()
-    value=re.sub(r"[^a-z0-9]+","",value)
-    return re.sub(r"\d+$","",value)
+    # Tailscale may add a collision suffix such as "-1". Remove only that
+    # suffix; keep meaningful model/name digits such as "s24".
+    value=re.sub(r"[-_.]\d+$","",value)
+    return re.sub(r"[^a-z0-9]+","",value)
+
+
+def _direct_lan_networks():
+    nets=[]
+    raw=command_output(["ip","-4","route","show","scope","link"])
+    for line in raw.splitlines():
+        parts=line.split()
+        if not parts:
+            continue
+        dev=""
+        if "dev" in parts:
+            try:
+                dev=parts[parts.index("dev")+1]
+            except (ValueError,IndexError):
+                dev=""
+        if dev=="tailscale0" or dev=="lo" or dev.startswith(("docker","br-","veth")):
+            continue
+        try:
+            net=ipaddress.ip_network(parts[0],strict=False)
+        except ValueError:
+            continue
+        if net.version==4 and _rfc1918_ipv4(str(net.network_address)):
+            nets.append(net)
+    return nets
+
+
+def _is_direct_lan_ip(value,nets=None):
+    if not _rfc1918_ipv4(value):
+        return False
+    nets=_direct_lan_networks() if nets is None else nets
+    if not nets:
+        return True
+    ip=ipaddress.ip_address(value)
+    return any(ip in net for net in nets)
 
 
 def _private_ip_from_endpoint(value):
@@ -236,11 +272,12 @@ def tailscale_devices():
         name=host or (dns.split(".",1)[0] if dns else ips[0])
         lan=[]
         direct=_private_ip_from_endpoint(node.get("CurAddr"))
-        if direct:
+        if direct and _is_direct_lan_ip(direct):
             lan.append(direct)
-        for endpoint in node.get("Endpoints") or []:
+        # Tailscale's JSON status calls known peer endpoints "Addrs".
+        for endpoint in node.get("Addrs") or []:
             cand=_private_ip_from_endpoint(endpoint)
-            if cand and cand not in lan:
+            if cand and _is_direct_lan_ip(cand) and cand not in lan:
                 lan.append(cand)
         out.append({
             "name":name,
@@ -255,6 +292,7 @@ def tailscale_devices():
 
 def recent_lan_clients():
     found={}
+    local_nets=_direct_lan_networks()
     if FTL_DB.is_file():
         try:
             import sqlite3
@@ -269,7 +307,7 @@ def recent_lan_clients():
                     q=f"SELECT ip,{name_expr} AS name,{seen_expr} AS lastSeen FROM network_addresses"
                     for row in db.execute(q):
                         ip=str(row["ip"] or "")
-                        if not _rfc1918_ipv4(ip):
+                        if not _is_direct_lan_ip(ip,local_nets):
                             continue
                         found[ip]={
                             "ip":ip,
@@ -283,7 +321,7 @@ def recent_lan_clients():
     raw=command_output(["ip","neigh","show"])
     for line in raw.splitlines():
         parts=line.split()
-        if not parts or not _rfc1918_ipv4(parts[0]):
+        if not parts or not _is_direct_lan_ip(parts[0],local_nets):
             continue
         ip=parts[0]
         item=found.setdefault(ip,{"ip":ip,"name":"","last_seen":0,"source":"LAN"})
@@ -398,6 +436,28 @@ def _auto_lan_for_tail_device(device,candidates):
     return "",""
 
 
+def _refresh_tail_device(device):
+    if device.get("lan_candidates") or not device.get("online"):
+        return device
+    tail_ip=(device.get("tailscale_ips") or [""])[0]
+    if not tail_ip:
+        return device
+    try:
+        subprocess.run(
+            ["tailscale","ping","--c","1","--timeout=2s",tail_ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+            check=False,
+        )
+    except Exception:
+        return device
+    for fresh in tailscale_devices():
+        if tail_ip in fresh.get("tailscale_ips",[]):
+            return fresh
+    return device
+
+
 def _find_tail_device_by_text(devices):
     value=prompt("Tailscale device name or MagicDNS name")
     if not value:
@@ -448,6 +508,7 @@ def link_device(path):
         offset=2
 
     if device is not None:
+        device=_refresh_tail_device(device)
         candidates=recent_lan_clients()
         auto_ip,reason=_auto_lan_for_tail_device(device,candidates)
         tail_ip=device["tailscale_ips"][0]
