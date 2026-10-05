@@ -69,7 +69,9 @@ SCRIPT_DIR="$(
 LOCAL_SOURCE=0
 if [[ -f "$SCRIPT_DIR/pihole-profile-manager" &&
       -f "$SCRIPT_DIR/pihole-profile-tui" &&
-      -f "$SCRIPT_DIR/profile-catalog.ini" ]]; then
+      -f "$SCRIPT_DIR/profile-catalog.ini" &&
+      -f "$SCRIPT_DIR/profile.example.ini" &&
+      -f "$SCRIPT_DIR/pihm-installer" ]]; then
   LOCAL_SOURCE=1
 else
   need curl
@@ -86,7 +88,7 @@ trap cleanup EXIT
 printf 'pihm installer\n'
 printf '  source: %s@%s\n' "$REPO" "$REF"
 printf '  home:   %s\n' "$DEST"
-printf '  command:%s/%s\n\n' "$BINDIR" "$COMMAND"
+printf '  command: %s/%s\n\n' "$BINDIR" "$COMMAND"
 
 for f in "${FILES[@]}"; do
   if (( LOCAL_SOURCE )); then
