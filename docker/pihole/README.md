@@ -200,13 +200,21 @@ See `../arachnidium/README.md` for the optional Arachnidium regular HTTP proxy e
 For a proxy published on port `18101`:
 
 ```text
-LAN:       192.168.1.10:18101
-Tailscale: 100.64.0.10:18101
+LAN IP:       192.168.1.10:18101
+Tailscale IP: 100.64.0.10:18101
 ```
 
 Both addresses terminate at the same proxy container, so they use the same Pi-hole profile.
 
-For the exact same endpoint while home or remote, advertise the OMV LAN IP or LAN subnet as a Tailscale subnet route. Then clients can use `192.168.1.10:18101` in both places.
+The easiest single address is the OMV MagicDNS hostname:
+
+```text
+omv.example-tailnet.ts.net:18101
+```
+
+On the home LAN, Pi-hole can override that hostname to the OMV LAN IP. Away from home, Tailscale MagicDNS resolves the same hostname to the OMV Tailscale IP. The browser proxy setting therefore stays identical in both places.
+
+If the exact same literal LAN IP is required instead, advertise the OMV LAN IP or LAN subnet as a Tailscale subnet route.
 
 Never expose a MITM proxy on a public/WAN address.
 
