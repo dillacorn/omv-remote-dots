@@ -239,8 +239,8 @@ Example result:
 ```ini
 [clients]
 entries =
-    100.108.157.125 | dillons-s24-1 - Tailscale
-    192.168.68.59 | dillons-s24-1 - LAN
+    100.64.0.50 | phone - Tailscale
+    192.168.1.50 | phone - LAN
 ```
 
 Both addresses select the same Pi-hole policy. The LAN address is used when the device talks to Pi-hole locally; the Tailscale address is used when DNS reaches Pi-hole over Tailscale.
