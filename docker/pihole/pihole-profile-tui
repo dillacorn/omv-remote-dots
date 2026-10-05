@@ -1225,7 +1225,7 @@ def main():
     if not sys.stdin.isatty() or not sys.stdout.isatty(): print("ERROR: interactive terminal required",file=sys.stderr); return 2
     M["PROFILES"].mkdir(parents=True,exist_ok=True)
     while True:
-        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / sync","Arachnidium proxies configure / connection info","Maintenance         blocklist updates / status","Update pihm         fetch latest from main","Help","Quit"],"Arrow-key TUI inspired by smtty/Awtarchy navigation")
+        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / sync","Arachnidium proxies configure / connection info","Maintenance         blocklist updates / status","Update pihm         fetch latest from main","Help","Quit"])
         if c is None or c==5: clear(); return 0
         if c==0: profiles_menu()
         elif c==1: proxy_screen()
