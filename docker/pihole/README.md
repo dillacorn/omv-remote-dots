@@ -132,6 +132,7 @@ Start from `profile.example.ini`.
 [profile]
 name = Example Strict
 description = My profile
+default = false
 
 [lists]
 keys =
@@ -165,6 +166,23 @@ label = arachnidium-personal
 The proxy port is the address you enter in a browser/Android proxy setting. The Docker IP is the fixed private source address Pi-hole uses to select this profile. When the profile is applied, `pihm` automatically assigns the configured proxy Docker IP to the Pi-hole group, so it does not need to be duplicated under `[clients]`.
 
 The manager converts allow/deny domains and TLDs into Pi-hole regex rules that also cover subdomains. It synchronizes its catalog lists and manager-owned rules/clients while leaving unrelated manual Pi-hole data alone.
+
+### Default fallback profile
+
+Pi-hole's built-in `Default` group is the policy used by otherwise-unassigned clients. `pihm` can make one normal profile the persistent fallback policy.
+
+In the TUI, open the profile and set **Default fallback**. The profile list marks the selected profile with `[DEFAULT]`.
+
+CLI:
+
+```bash
+pihm default "Home Router"
+pihm default
+```
+
+When the selected fallback profile is synced, `pihm` mirrors that profile's current blocklist assignments and allow/deny/TLD rules into Pi-hole's built-in `Default` group. Client assignments are not copied.
+
+This means a setup can use specific profiles for known clients while all otherwise-unassigned clients automatically receive the chosen fallback policy. Cloning a profile never copies its default status.
 
 ### Link a device without typing IPs
 
