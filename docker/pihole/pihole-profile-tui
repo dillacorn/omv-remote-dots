@@ -391,11 +391,12 @@ def proxy_editor(path):
                 except Exception as e: show_text("Proxy error",str(e))
             continue
 
+        label=p["proxy_label"] or f"arachnidium-{M['slug'](p['name'])}"
         c=menu("Proxy endpoint",[
             f"Connection info      :{p['proxy_port']}",
             f"Change port          {p['proxy_port']}",
             f"Change Docker IP     {p['proxy_ip']}",
-            f"Container label      {p['proxy_label'] or f'arachnidium-{M["slug"](p["name"])}'}",
+            f"Container label      {label}",
             "Disable proxy",
             "Back",
         ],f"{p['name']} -> port {p['proxy_port']} -> {p['proxy_ip']}")
