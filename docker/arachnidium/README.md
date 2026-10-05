@@ -72,15 +72,17 @@ While connected through the proxy, open `http://mitm.it` and install the mitmpro
 
 The CA private key in `state/mitmproxy` is sensitive. Back it up securely and never publish that directory.
 
-## Exact same address on LAN and Tailscale
+## One proxy address at home and away
 
-If OMV advertises its LAN IP or LAN subnet as a Tailscale subnet route, remote clients can use the LAN endpoint too:
+The easiest single browser setting is the OMV MagicDNS hostname:
 
 ```text
-192.168.1.10:18101
+omv.example-tailnet.ts.net:18101
 ```
 
-That gives the exact same proxy address on the home LAN and while remote over Tailscale. Without a subnet route, use the LAN IP locally and the Tailscale IP remotely; the profile port stays the same.
+On the home LAN, Pi-hole can override that hostname to the OMV LAN IP. Away from home, Tailscale MagicDNS resolves the same hostname to the OMV Tailscale IP. Both paths land on the same profile proxy.
+
+If the exact same literal LAN IP is required instead, advertise the OMV LAN IP or LAN subnet as a Tailscale subnet route. Then remote clients can also use `192.168.1.10:18101`.
 
 ## Add another profile proxy
 
