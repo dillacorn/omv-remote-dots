@@ -634,7 +634,7 @@ def clone(path):
     if not name: return None
     out=M["PROFILES"]/f"{M['slug'](name)}.ini"
     if out.exists(): show_text("Already exists",str(out)); return None
-    shutil.copy2(path,out); c=cfg(out); c.set("profile","name",name); c.set("profile","description",f"Cloned from {p['name']}"); dump(c,out); return out
+    shutil.copy2(path,out); c=cfg(out); c.set("profile","name",name); c.set("profile","description",f"Cloned from {p['name']}"); c.set("profile","default","false"); dump(c,out); return out
 
 
 def live_group_description(name):
@@ -678,6 +678,7 @@ def profile_editor(path):
     while True:
         p=M["load"](path,CAT)
         proxy=f":{p['proxy_port']}  {p['proxy_ip']} (reserved; not necessarily running)" if p["proxy_enabled"] else "No endpoint reserved"
+        default_state="Yes - unassigned clients use this policy" if p.get("is_default") else "No"
         items=[
             f"Description          {p['description']}",
             f"Blocklists selected  {len(p['keys'])}",
@@ -685,6 +686,7 @@ def profile_editor(path):
             f"Deny domains         {len(p['deny'])}",
             f"Blocked TLDs         {len(p['tlds'])}",
             f"Clients              {len(p['clients'])}",
+            f"Default fallback     {default_state}",
             f"Arachnidium endpoint {proxy}",
             "Sync to Pi-hole       rules / clients / list assignments",
             "Sync + refresh lists  download latest blocklists",
@@ -692,10 +694,10 @@ def profile_editor(path):
             "View raw INI",
             "Back",
         ]
-        sub="Reserving an endpoint does NOT start Arachnidium or force this profile through a proxy."
+        sub="Default fallback mirrors this profile into Pi-hole's built-in Default group for otherwise-unassigned clients."
         if p["proxy_enabled"]: sub+=f"  Proxy port: {p['proxy_port']}"
         c=menu(f"Profile: {p['name']}",items,sub)
-        if c is None or c==11: return
+        if c is None or c==12: return
         if c==0:
             edit_description(path,p)
         elif c==1: edit_lists(path)
@@ -703,13 +705,18 @@ def profile_editor(path):
         elif c==3: edit_values(path,"deny","domains","Denied domains")
         elif c==4: edit_values(path,"deny","tlds","Blocked TLDs")
         elif c==5: edit_clients(path)
-        elif c==6: proxy_editor(path)
-        elif c==7: apply(path,False)
-        elif c==8: apply(path,True)
-        elif c==9:
+        elif c==6:
+            if p.get("is_default"):
+                show_text("Default fallback",f"{p['name']} is already the fallback policy for otherwise-unassigned clients.")
+            elif confirm(f"Use {p['name']} as the Default fallback?\n\nThis will mirror its blocklists and allow/deny rules into Pi-hole's built-in Default group."):
+                external("Set Default fallback",lambda:M["set_default_profile"](p["name"],CAT))
+        elif c==7: proxy_editor(path)
+        elif c==8: apply(path,False)
+        elif c==9: apply(path,True)
+        elif c==10:
             out=clone(path)
             if out: path=out
-        elif c==10: show_text("Raw profile",path.read_text(encoding="utf-8"),str(path))
+        elif c==11: show_text("Raw profile",path.read_text(encoding="utf-8"),str(path))
 
 
 def new_profile():
@@ -739,8 +746,8 @@ def profiles_menu():
         ps=[]
         for p in M["pfiles"]():
             try: ps.append(M["load"](p,CAT))
-            except BaseException: ps.append({"path":p,"name":p.stem,"proxy_enabled":False,"proxy_port":None})
-        items=[p["name"]+(f"   [Arachnidium endpoint :{p['proxy_port']} reserved]" if p.get("proxy_enabled") else "   [no Arachnidium endpoint]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
+            except BaseException: ps.append({"path":p,"name":p.stem,"proxy_enabled":False,"proxy_port":None,"is_default":False})
+        items=[p["name"]+("   [DEFAULT]" if p.get("is_default") else "")+(f"   [Arachnidium endpoint :{p['proxy_port']} reserved]" if p.get("proxy_enabled") else "   [no Arachnidium endpoint]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
         c=menu("Profiles",items,"An endpoint is only a reserved port/IP mapping. It does not mean Arachnidium is running or forced on clients.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
@@ -1040,6 +1047,12 @@ Example:
 
 A profile does NOT automatically mean proxy.
 A device can use the profile through normal Pi-hole DNS with no Arachnidium.
+
+Default fallback:
+  One profile can be marked as the fallback policy.
+  Its blocklists and allow/deny rules are mirrored into Pi-hole's built-in
+  Default group, so otherwise-unassigned clients get that policy.
+  Syncing that profile keeps Default mirrored automatically.
 """)
         elif c==2:
             show_text("Help: Link devices","""Recommended path:
