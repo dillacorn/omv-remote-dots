@@ -31,11 +31,14 @@ curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/dock
 
 The installer keeps the manager under `/docker/pihole`, creates `/usr/local/bin/pihm`, preserves existing profile files, backs up replaced manager files, and validates the Python programs before installing them.
 
-Update later:
+Updates are handled inside the TUI:
 
-```bash
-pihm-installer update
+```text
+pihm
+  -> Update pihm
 ```
+
+The updater downloads the latest manager files from `main`, validates them, creates backups for changed program files, installs the update, and restarts the TUI automatically.
 
 Uninstall only the manager program files and command links:
 
@@ -57,7 +60,7 @@ Running `/docker/pihole/pihole-profile-manager` with no arguments opens the same
 
 Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, Enter selects or toggles, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
 
-The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT]` or `[proxy off]` beside every profile.
+The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, update `pihm` itself, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT]` or `[proxy off]` beside every profile.
 
 On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/profiles.d/` without changing them.
 
