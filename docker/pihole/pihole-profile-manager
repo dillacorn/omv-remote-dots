@@ -110,12 +110,12 @@ def apply_one(p,cat):
         for r in c.execute("SELECT a.id,a.address FROM adlist a JOIN adlist_by_group x ON x.adlist_id=a.id WHERE x.group_id=?",(gid,)).fetchall():
             if native_hint(r["address"]) in set(NATIVE_PATH)|{"sonos"}: c.execute("DELETE FROM adlist_by_group WHERE adlist_id=? AND group_id=?",(int(r["id"]),gid))
         for u,comment in selected:
-            aid=ensure_list(c,u,comment); c.execute("DELETE FROM adlist_by_group WHERE adlist_id=? AND group_id=0",(aid,)); c.execute("INSERT OR IGNORE INTO adlist_by_group(adlist_id,group_id) VALUES(?,?)",(aid,gid))
+            aid=ensure_list(c,u,comment); c.execute("INSERT OR IGNORE INTO adlist_by_group(adlist_id,group_id) VALUES(?,?)",(aid,gid))
         for typ,items in ((2,p["allow"]),(3,p["deny"])):
             for d in items:
-                rid=ensure_rule(c,typ,rx(d)); c.execute("DELETE FROM domainlist_by_group WHERE domainlist_id=? AND group_id=0",(rid,)); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
+                rid=ensure_rule(c,typ,rx(d)); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
         for t in p["tlds"]:
-            rid=ensure_rule(c,3,rx(t.lstrip("."))); c.execute("DELETE FROM domainlist_by_group WHERE domainlist_id=? AND group_id=0",(rid,)); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
+            rid=ensure_rule(c,3,rx(t.lstrip("."))); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
         prefix=f"{CLIENT_TAG}{p['name']}:"; wanted={a:l for a,l in p["clients"]}
         for r in c.execute("SELECT id,ip FROM client WHERE comment LIKE ?",(prefix+"%",)).fetchall():
             if r["ip"] not in wanted:
