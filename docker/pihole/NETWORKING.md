@@ -1,96 +1,80 @@
-# Pi-hole networking guide
+# Pi-hole networking reference
 
-This document records the networking design and the failure modes that were validated while moving Pi-hole from a simple LAN DNS server into a profile-aware DNS service that also works over Tailscale and IPv6.
+Use [SETUP.md](SETUP.md) for the normal setup.
 
-The important goal is not merely "make DNS answer." Pi-hole profiles depend on seeing the real client source address. Any router, proxy, NAT layer, Docker userland proxy, or encrypted-DNS client that hides that address can make multiple devices collapse into one Pi-hole client.
+This file records the advanced networking behavior that was actually validated so future troubleshooting does not repeat the same false starts.
 
-## Validated design
-
-The working design has three DNS paths:
+## Intended DNS paths
 
 ```text
 LAN IPv4 client
   -> Pi-hole LAN IPv4
-  -> Pi-hole sees the real LAN client IPv4
+  -> Pi-hole sees the client LAN IPv4
 
 Tailscale client
   -> OMV Tailscale IPv4
   -> Pi-hole
-  -> Pi-hole sees the real 100.x Tailscale client IPv4
+  -> Pi-hole sees the client 100.x address
 
-LAN IPv6 client
-  -> router-advertised IPv6 DNS path
-  -> Pi-hole IPv6 endpoint
+LAN IPv6 client on validated stock ASUSWRT
+  -> ASUS LAN IPv6 advertised as RDNSS
+  -> ASUS forwards to Pi-hole IPv6
+  -> filtering works, but Pi-hole may see the ASUS instead of the client
 ```
 
-The first two paths preserve per-device identity and are the preferred profile-selection paths.
+For per-device policy, the stable LAN IPv4 and Tailscale IPv4 identities are the preferred identifiers.
 
-The IPv6 path needs extra care because stock consumer routers may advertise themselves as the IPv6 Recursive DNS Server (RDNSS) even when a custom upstream IPv6 DNS server is configured. In that case DNS still reaches Pi-hole, but Pi-hole may see the router as the client.
+## AT&T BGW320 + stock ASUSWRT
 
-## AT&T BGW320 + stock ASUSWRT findings
+Validated hardware/software pattern:
 
-The validated upstream/router combination was:
+- AT&T BGW320-500;
+- ASUS RT-AX82U on stock ASUSWRT;
+- BGW320 IPv4 IP Passthrough enabled;
+- BGW320 IPv6 enabled;
+- BGW320 DHCPv6 enabled;
+- BGW320 DHCPv6 Prefix Delegation enabled;
+- ASUS IPv6 mode `Native`;
+- ASUS DHCP-PD enabled;
+- ASUS LAN autoconfiguration `Stateless`;
+- ASUS Router Advertisement enabled;
+- ASUS IPv6 firewall enabled.
 
-- AT&T BGW320-500
-- ASUS RT-AX82U on stock ASUSWRT
-- BGW320 IPv4 IP Passthrough enabled
-- BGW320 IPv6 enabled
-- BGW320 DHCPv6 enabled
-- BGW320 DHCPv6 Prefix Delegation enabled
-- ASUS IPv6 mode changed from `Passthrough` to `Native`
-- ASUS DHCP-PD enabled
-- ASUS LAN IPv6 autoconfiguration set to Stateless
-- ASUS Router Advertisement enabled
-- ASUS IPv6 firewall enabled
+### Why Native + DHCP-PD
 
-### Why Native + DHCP-PD mattered
+With ASUS IPv6 set to `Passthrough`, the BGW320 did not show a delegated prefix for the ASUS.
 
-With ASUS IPv6 set to `Passthrough`, the BGW320 status page did not show a delegated prefix for the downstream router and the LAN inherited upstream IPv6 behavior.
+After changing ASUS to `Native` with DHCP-PD enabled:
 
-After switching ASUS to `Native` with DHCP-PD enabled:
+- the BGW320 populated its delegated-prefix field;
+- the ASUS received a dedicated LAN /64;
+- the ASUS became the IPv6 router for the LAN;
+- external IPv6 connectivity worked;
+- Tailscale reported both public IPv4 and public IPv6 capability.
 
-1. the BGW320 populated its delegated-prefix field;
-2. the ASUS received a dedicated /64 for the LAN;
-3. the ASUS became the IPv6 default router for the LAN; and
-4. normal IPv6 connectivity remained available for applications and Tailscale.
+Do not disable IPv6 merely to simplify DNS.
 
-Do not disable IPv6 merely to simplify DNS. DNS can travel over IPv4 and still return AAAA records, and native IPv6 can materially help Tailscale establish direct peer-to-peer paths.
+## Stock ASUSWRT RDNSS limitation
 
-## Stock ASUSWRT IPv6 DNS limitation
+Even after configuring Pi-hole as the custom IPv6 DNS target, `rdisc6` showed stock ASUSWRT advertising the ASUS LAN IPv6 address itself as the Recursive DNS Server.
 
-A key stock-ASUSWRT behavior was confirmed with `rdisc6`:
-
-- even with "Connect to DNS Server automatically" disabled;
-- and even with a custom Pi-hole IPv6 DNS address configured;
-
-the ASUS still advertised its own LAN IPv6 address as the RDNSS server.
-
-Conceptually:
+That means the practical path can remain:
 
 ```text
-client
-  -> ASUS IPv6 DNS address advertised by RDNSS
-  -> ASUS forwards to Pi-hole
-  -> Pi-hole may see the ASUS/router as the DNS client
+client -> ASUS IPv6 DNS -> Pi-hole
 ```
 
-This is not a DNS-filtering failure. Pi-hole still filters the query. The limitation is client identity: per-device Pi-hole profiles cannot distinguish clients whose IPv6 DNS queries are being proxied by the router.
+Pi-hole still filters the request, but the source identity may collapse to the router.
 
-For devices that need strict per-device policy, the Tailscale DNS path is the reliable identity-preserving path because Pi-hole can see the device's stable Tailscale 100.x address.
+This is a client-identity limitation, not a Pi-hole filtering failure.
 
-Do not add rotating Android IPv6 privacy addresses to `pihm` profiles. Prefer the stable LAN IPv4 address plus the stable Tailscale IPv4 address.
+Do not add rotating Android IPv6 privacy addresses to `pihm` profiles as a workaround.
 
-## Pi-hole IPv6 macvlan endpoint
+## Pi-hole IPv6 macvlan
 
-The base Pi-hole Compose network is intentionally IPv4-only. LAN IPv4 and Tailscale DNS are published through host bindings.
+The normal Pi-hole Docker bridge is IPv4-only.
 
-For direct IPv6 LAN reachability, use a separate IPv6-only macvlan network attached to the physical LAN interface. This avoids publishing a global IPv6 port into an IPv4-only Docker bridge and gives Pi-hole a real Layer-2 IPv6 presence on the LAN.
-
-Use the repository overlay:
-
-```text
-docker/pihole/compose.ipv6-dns.yml
-```
+`compose.ipv6-dns.yml` adds a separate IPv6-only macvlan so Pi-hole has a real IPv6 address on the physical LAN.
 
 Required variables:
 
@@ -101,24 +85,16 @@ LAN_IPV6_GATEWAY
 PIHOLE_IPV6
 ```
 
-Example only:
+Example:
 
 ```bash
 export LAN_INTERFACE=enp3s0
 export LAN_IPV6_SUBNET='2001:db8:1234:5678::/64'
 export LAN_IPV6_GATEWAY='2001:db8:1234:5678::1'
 export PIHOLE_IPV6='2001:db8:1234:5678::53'
-
-docker compose \
-  -f compose.yml \
-  -f compose.tailscale-dns.yml \
-  -f compose.ipv6-dns.yml \
-  config
 ```
 
-Always validate the merged Compose config before recreating the stack.
-
-Then apply with the same complete overlay set:
+Validate the full active stack before applying:
 
 ```bash
 TAILSCALE_IP="$(tailscale ip -4 | head -n1)"
@@ -132,133 +108,171 @@ docker compose \
   -f compose.yml \
   -f compose.tailscale-dns.yml \
   -f compose.ipv6-dns.yml \
-  up -d
+  config
 ```
 
-Future Compose recreations must include all active overlays. Omitting the IPv6 overlay will remove the Pi-hole macvlan attachment.
+Use the same active overlay set when recreating the stack.
+
+The macvlan solves Pi-hole IPv6 reachability. It does not force stock ASUSWRT to advertise Pi-hole itself as RDNSS.
 
 ## Prefix changes
 
-Residential delegated IPv6 prefixes are not guaranteed to remain permanent.
+Residential delegated IPv6 prefixes may change.
 
-Never hard-code a residential global IPv6 prefix into the public repository or into unrelated local-DNS overrides unless there is an explicit mechanism to refresh it.
+Do not hard-code a residential global prefix into the public repository.
 
-After a prefix change:
+If the delegated prefix changes, update these together:
 
-1. read the currently delegated LAN /64 from the router or `rdisc6`;
-2. update `LAN_IPV6_SUBNET`;
-3. update `LAN_IPV6_GATEWAY`;
-4. choose/update `PIHOLE_IPV6` inside that /64;
-5. recreate the stack with the IPv6 overlay; and
-6. update the router's custom IPv6 DNS target.
+1. `LAN_IPV6_SUBNET`;
+2. `LAN_IPV6_GATEWAY`;
+3. `PIHOLE_IPV6`;
+4. the router's custom IPv6 DNS target.
 
-Old global addresses may remain on Linux interfaces until their advertised lifetimes expire. That alone is not a reason to restart networking.
+Old IPv6 addresses may remain on Linux interfaces until their advertised lifetimes expire. That alone is not a reason to restart networking.
 
-## Local DNS overrides
-
-Avoid hard-coded AAAA overrides that point at a residential delegated prefix unless they are maintained automatically.
-
-A stale AAAA record can keep directing clients at an old prefix after DHCP-PD changes the LAN /64.
-
-Stable LAN IPv4 overrides are usually safer for local service names when IPv6 prefix persistence is not guaranteed.
+Avoid hard-coded local AAAA overrides tied to a residential delegated prefix unless they are maintained automatically.
 
 ## Tailscale DNS
 
-The tailnet global resolver should point to the OMV Tailscale IPv4 address while MagicDNS remains enabled.
+Recommended tailnet DNS:
 
-For profile-aware DNS, verify Pi-hole logs show the real 100.x device address:
+```text
+Global nameserver: OMV Tailscale IPv4
+MagicDNS: on
+Override DNS servers: on
+```
+
+Remove any direct NextDNS global resolver instead of leaving it beside Pi-hole.
+
+Verify Pi-hole sees the real Tailscale client address:
 
 ```bash
 docker exec pihole pihole -t
 ```
 
-If all tailnet queries appear from one shared address, do not assume profile isolation is working.
+For a linked device, the same profile can contain:
 
-Do not configure NextDNS and Pi-hole as parallel global tailnet resolvers during migration. That creates a bypass path. Chain the upstream through Pi-hole until migration is complete.
+```text
+LAN IPv4
+Tailscale 100.x IPv4
+```
 
-## Android / browser encrypted-DNS bypasses
+`pihm` should discover/link these where possible.
 
-When debugging a client that appears to skip Pi-hole, check all of these separately:
+## Upstream DNS
 
-- Android Private DNS / DNS-over-TLS
-- Firefox DNS-over-HTTPS
-- browser-specific Secure DNS
-- VPN/Tailscale DNS overrides
-- cached DNS and already-open HTTP/2 or HTTP/3 connections
+Default and recommended:
 
-A browser can keep loading pages without generating new DNS queries because answers and network connections are cached.
+```text
+client -> Pi-hole -> dnsproxy -> Quad9 DoH
+```
 
-A useful proof test is a unique intentionally nonexistent hostname. If Pi-hole logs the lookup, the browser is using the Pi-hole path even though the page itself fails.
+Optional:
+
+```text
+client -> Pi-hole -> dnsproxy -> NextDNS DoH
+```
+
+Use one upstream behind Pi-hole.
+
+Do not configure Quad9 and NextDNS as parallel client-side resolvers around Pi-hole.
+
+Always inspect the running `dnsproxy` command before changing a live host.
+
+## Browser and Android DNS bypasses
+
+Check these separately:
+
+- Android Private DNS;
+- Firefox DNS-over-HTTPS;
+- other browser Secure DNS settings;
+- VPN/Tailscale DNS;
+- cached DNS answers;
+- persistent HTTP/2 or HTTP/3 connections.
+
+Android Private DNS can be correct while Firefox still bypasses Pi-hole through DoH.
+
+Android Wi-Fi Proxy should normally remain `None`. Proxy `Auto-config` is not a DNS fix.
+
+A browser can continue loading pages without generating new DNS queries.
+
+To force a fresh lookup, use a unique intentionally nonexistent hostname and watch Pi-hole logs. The page is expected to fail; the DNS query is the test.
+
+## Evidence rules
+
+Do not over-interpret one log line.
+
+A query logged from the router does not prove a particular downstream device generated it. Routers perform their own DNS lookups.
+
+A packet capture on OMV cannot see a phone-to-router DNS packet if that packet terminates at the router.
+
+Use multiple pieces of evidence when client identity matters:
+
+- Pi-hole query log;
+- unique test hostname;
+- `rdisc6`;
+- packet capture;
+- Tailscale status/netcheck/ping.
 
 ## Useful diagnostics
 
-Show the router advertisement and RDNSS:
+Active Compose files:
+
+```bash
+docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
+```
+
+Pi-hole interfaces:
+
+```bash
+docker exec pihole sh -c 'ip -br addr'
+```
+
+DNS listeners:
+
+```bash
+docker exec pihole sh -c 'ss -lnptu | grep ":53 "'
+```
+
+Live Pi-hole traffic:
+
+```bash
+docker exec pihole pihole -t
+```
+
+Router Advertisement and RDNSS:
 
 ```bash
 rdisc6 enp3s0
 ```
 
-Show Pi-hole client traffic:
+Tailscale network capability:
 
 ```bash
-docker exec pihole pihole -t
+tailscale netcheck
 ```
 
-Follow one LAN IPv4 client:
+Specific peer path:
 
 ```bash
-docker exec pihole pihole -t | grep --line-buffered '192.168.1.50'
+tailscale ping <peer>
 ```
 
-Follow a physical LAN device across IPv4/IPv6 DNS by MAC:
+`tailscale netcheck` proves available network capability, not that every peer is direct.
 
-```bash
-PHONE_MAC="$(ip neigh show 192.168.1.50 | awk '/lladdr/ {print $5; exit}')"
-timeout 30 tcpdump -ni enp3s0 -nn "ether host $PHONE_MAC and (port 53 or port 853)"
-```
-
-Check the Pi-hole container's interfaces and DNS listeners:
-
-```bash
-docker exec pihole sh -c 'ip -br addr'
-docker exec pihole sh -c 'ss -lnptu | grep ":53 "'
-```
-
-Check Compose identity before changing a live stack:
-
-```bash
-docker inspect pihole --format $'container={{.Name}}\nproject={{index .Config.Labels "com.docker.compose.project"}}\nservice={{index .Config.Labels "com.docker.compose.service"}}\nworkdir={{index .Config.Labels "com.docker.compose.project.working_dir"}}\nfiles={{index .Config.Labels "com.docker.compose.project.config_files"}}'
-```
+After recreating Pi-hole, wait for FTL to finish starting and verify port 53 is listening before diagnosing an immediate connection failure as a networking-design problem.
 
 ## Security
 
-Never expose raw Pi-hole DNS on public WAN IPv4 or globally routable IPv6 without an explicit access-control design.
+Never expose raw Pi-hole DNS publicly without an explicit access-control design.
 
-For this design:
+For the validated design:
 
 - ASUS IPv6 firewall stays enabled;
 - LAN IPv6 may reach the Pi-hole macvlan endpoint;
 - Tailscale reaches Pi-hole through the Tailscale-bound IPv4 DNS port;
 - WAN/public DNS is not intentionally opened.
 
-The Pi-hole API/web password is a secret. Do not commit it, quote it into documentation, or leave it exposed in shared logs. Rotate it if it has been pasted into a chat, ticket, or public location.
+Do not commit passwords, API keys, tailnet names, residential public IPv6 prefixes, or other deployment secrets.
 
-## Upstream DNS policy
-
-The repository default and recommended design is:
-
-```text
-client -> Pi-hole -> dnsproxy -> Quad9 DoH
-```
-
-Pi-hole remains the self-hosted filtering and per-client policy layer. `dnsproxy` provides encrypted upstream transport. Quad9 is the default recursive resolver.
-
-NextDNS remains supported as an optional upstream:
-
-```text
-client -> Pi-hole -> dnsproxy -> NextDNS DoH
-```
-
-Do not configure NextDNS and Quad9 as parallel client-side resolvers around Pi-hole because that creates a policy bypass path. Use exactly one upstream behind Pi-hole.
-
-A live host may differ from the repository default, especially during migrations. Always verify the running `dnsproxy` command before changing upstream DNS.
+Rotate the Pi-hole web/API password if it has been pasted into a chat, ticket, or public location.
