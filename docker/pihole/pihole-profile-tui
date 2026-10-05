@@ -40,10 +40,21 @@ def clip(s,n): return s if len(s)<=n else s[:max(0,n-1)]+"…"
 def key():
     fd=sys.stdin.fileno(); old=termios.tcgetattr(fd)
     try:
-        tty.setraw(fd); data=os.read(fd,1)
-        if data==b"\x1b":
-            while select.select([fd],[],[],0.035)[0] and len(data)<8: data+=os.read(fd,1)
-    finally: termios.tcsetattr(fd,termios.TCSADRAIN,old)
+        tty.setraw(fd)
+        data=os.read(fd,1)
+        if data==b"\x1b" and select.select([fd],[],[],0.035)[0]:
+            second=os.read(fd,1)
+            data+=second
+            if second==b"[":
+                while len(data)<8 and select.select([fd],[],[],0.035)[0]:
+                    ch=os.read(fd,1)
+                    data+=ch
+                    # Stop at the end of this CSI sequence so a held arrow
+                    # key can deliver the next repeated sequence separately.
+                    if ch==b"~" or (b"A" <= ch <= b"Z") or (b"a" <= ch <= b"z"):
+                        break
+    finally:
+        termios.tcsetattr(fd,termios.TCSADRAIN,old)
     m={b"\x1b[A":"UP",b"\x1b[B":"DOWN",b"\x1b[5~":"PGUP",b"\x1b[6~":"PGDN",b"\x1b[H":"HOME",b"\x1b[F":"END",b"\r":"ENTER",b"\n":"ENTER",b"\x1b":"ESC"}
     return m.get(data,data.decode(errors="ignore"))
 
@@ -54,7 +65,7 @@ def heading(name,sub=""):
     print("─"*min(width(),100))
 
 
-def menu(name,items,sub="",default=0,footer="Up/Down or j/k = move   Enter = select   q/Esc = back"):
+def menu(name,items,sub="",default=0,footer="Up/Down or j/k = move   Enter = select   h = help   q/Esc = back"):
     if not items: items=["(empty)"]
     i=max(0,min(default,len(items)-1)); off=0
     while True:
@@ -75,6 +86,8 @@ def menu(name,items,sub="",default=0,footer="Up/Down or j/k = move   Enter = sel
         elif k=="HOME": i=0
         elif k=="END": i=len(items)-1
         elif k=="ENTER": return i
+        elif lo=="h" and "help_screen" in globals():
+            help_screen()
         elif k=="ESC" or lo in {"q","b"}: return None
         elif lo.isdigit() and lo!="0" and int(lo)<=len(items): return int(lo)-1
 
@@ -196,9 +209,18 @@ def edit_lists(path):
 
 
 def apply(path,gravity=False):
+    p=M["load"](path,CAT)
+    action="Apply + Gravity" if gravity else "Apply Pi-hole policy"
+    detail=(
+        "This writes the profile's group settings, selected list assignments, allow/deny rules, "
+        "blocked TLDs, clients, and configured proxy IP into Pi-hole. "
+        + ("It also downloads/rebuilds all Gravity blocklists." if gravity else "It reloads DNS without redownloading Gravity lists.")
+    )
+    if not confirm(f"{action} for {p['name']}?\n\n{detail}"):
+        return
     def work():
-        p=M["load"](path,CAT); M["apply_one"](p,CAT); M["reload"](gravity)
-    external("Apply profile"+(" + Gravity" if gravity else ""),work)
+        M["apply_one"](p,CAT); M["reload"](gravity)
+    external(action,work)
 
 
 def clone(path):
@@ -209,18 +231,54 @@ def clone(path):
     shutil.copy2(path,out); c=cfg(out); c.set("profile","name",name); c.set("profile","description",f"Cloned from {p['name']}"); dump(c,out); return out
 
 
+def live_group_description(name):
+    try:
+        db=M["con"]()
+        row=db.execute('SELECT description FROM "group" WHERE name=?',(name,)).fetchone()
+        db.close()
+        return (row["description"] or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
+def edit_description(path,p):
+    while True:
+        live=live_group_description(p["name"])
+        current=p["description"]
+        items=[
+            f"Edit description      {current}",
+            f"Restore from Pi-hole  {live or '(no live description)'}",
+            "Back",
+        ]
+        c=menu("Description",items,f"Profile: {p['name']}")
+        if c is None or c==2: return
+        if c==0:
+            v=prompt("Description",current)
+            if v is not None and v.strip():
+                set_value(path,"profile","description",v.strip())
+                return
+            if v is not None:
+                show_text("Description","Description cannot be empty. The existing value was kept.")
+        elif c==1:
+            if not live:
+                show_text("Description","The live Pi-hole group does not currently have a description to restore.")
+                continue
+            if confirm(f"Restore description from live Pi-hole?\n\n{live}"):
+                set_value(path,"profile","description",live)
+                return
+
+
 def profile_editor(path):
     while True:
         p=M["load"](path,CAT)
         proxy=f":{p['proxy_port']}  {p['proxy_ip']}" if p["proxy_enabled"] else "Disabled"
-        items=[f"Description          {p['description']}",f"Blocklists           {len(p['keys'])}",f"Allow domains        {len(p['allow'])}",f"Deny domains         {len(p['deny'])}",f"Blocked TLDs         {len(p['tlds'])}",f"Clients              {len(p['clients'])}",f"Proxy endpoint       {proxy}","Apply profile        reload DNS","Apply + Gravity      rebuild lists","Clone profile","View raw INI","Back"]
+        items=[f"Description          {p['description']}",f"Blocklists selected  {len(p['keys'])}",f"Allow domains        {len(p['allow'])}",f"Deny domains         {len(p['deny'])}",f"Blocked TLDs         {len(p['tlds'])}",f"Clients              {len(p['clients'])}",f"Proxy endpoint       {proxy}","Apply Pi-hole policy sync rules/clients","Apply + Gravity      sync + rebuild blocklists","Clone profile","View raw INI","Back"]
         sub="Profile-file edits save immediately. Pi-hole changes only on Apply."
         if p["proxy_enabled"]: sub+=f"  Proxy port: {p['proxy_port']}"
         c=menu(f"Profile: {p['name']}",items,sub)
         if c is None or c==11: return
         if c==0:
-            v=prompt("Description",p["description"])
-            if v is not None: set_value(path,"profile","description",v)
+            edit_description(path,p)
         elif c==1: edit_lists(path)
         elif c==2: edit_values(path,"allow","domains","Allowed domains")
         elif c==3: edit_values(path,"deny","domains","Denied domains")
@@ -450,11 +508,26 @@ def envfile(path):
 def proxy_screen():
     pos=0
     while True:
-        ps=configured_proxies()
-        items=[f"{p['name']:<34} :{p['proxy_port']}   {p['proxy_ip']}" for p in ps]+["Back"]
-        c=menu("Proxy endpoints",items,"Each configured port selects one Pi-hole profile.",min(pos,len(items)-1))
+        ps=[]
+        for path in M["pfiles"]():
+            try:
+                ps.append(M["load"](path,CAT))
+            except BaseException:
+                continue
+        items=[
+            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}" if p["proxy_enabled"] else "[off - Enter to configure]")
+            for p in ps
+        ]+["Back"]
+        c=menu("Proxy endpoints",items,"Every profile is listed. Enter an [off] profile to configure its proxy endpoint.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
-        pos=c; show_text("Proxy connection",proxy_connection_text(ps[c]))
+        pos=c
+        p=ps[c]
+        if p["proxy_enabled"]:
+            x=menu("Proxy endpoint",["Connection info","Edit / disable proxy","Back"],f"{p['name']} -> :{p['proxy_port']}")
+            if x==0: show_text("Proxy connection",proxy_connection_text(p))
+            elif x==1: proxy_editor(p["path"])
+        else:
+            proxy_editor(p["path"])
 
 
 def update_pihm():
@@ -492,8 +565,9 @@ def update_pihm():
 def help_screen():
     show_text("Help",f"""Navigation
 
-  Up/Down or j/k    Move
+  Up/Down or j/k    Move (holding arrows repeats)
   Enter             Select / toggle
+  h                 Help from any menu
   q or Esc          Back
   PgUp/PgDn         Scroll
 
@@ -501,9 +575,10 @@ Recommended workflow
 
   1. Profiles -> Import current Pi-hole groups (once on an existing install).
   2. Open a profile and toggle lists / edit allow, deny, TLD, and client entries.
-  3. Apply profile. Use Apply + Gravity when blocklist selections changed.
-  4. Open Proxy endpoint inside a profile to assign its port and Docker IP.
-  5. Apply the profile; pihm automatically assigns that proxy IP to the group.
+  3. Apply Pi-hole policy after changing rules, clients, or proxy settings.
+  4. Use Apply + Gravity when selected blocklists changed and need downloading.
+  5. Open Proxy endpoint inside a profile to assign its port and Docker IP.
+  6. A proxy marked [off] is only a Pi-hole profile until you configure and deploy a proxy for it.
 
 Files
 
