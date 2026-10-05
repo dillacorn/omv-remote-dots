@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# pihm-installer - install/update the Pi-hole profile manager TUI
+#
+# Installs managed files under /docker/pihole and exposes the short command:
+#   pihm
+#
+# Overrides:
+#   PIHM_REPO=dillacorn/omv-remote-dots
+#   PIHM_REF=main
+#   PIHM_HOME=/docker/pihole
+#   PIHM_BINDIR=/usr/local/bin
+#   PIHM_COMMAND=pihm
+
+set -euo pipefail
+
+REPO="${PIHM_REPO:-dillacorn/omv-remote-dots}"
+REF="${PIHM_REF:-main}"
+DEST="${PIHM_HOME:-/docker/pihole}"
+BINDIR="${PIHM_BINDIR:-/usr/local/bin}"
+COMMAND="${PIHM_COMMAND:-pihm}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${REF}/docker/pihole"
+ACTION="${1:-install}"
+
+FILES=(
+  pihole-profile-manager
+  pihole-profile-tui
+  profile-catalog.ini
+  profile.example.ini
+  pihm-installer
+)
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  die "Run this installer as root (or with sudo)."
+fi
+
+case "$ACTION" in
+  install|update|uninstall) ;;
+  *)
+    die "Usage: pihm-installer [install|update|uninstall]"
+    ;;
+esac
+
+if [[ "$ACTION" == "uninstall" ]]; then
+  rm -f "$BINDIR/$COMMAND" "$BINDIR/pihm-installer"
+  rm -f     "$DEST/pihole-profile-manager"     "$DEST/pihole-profile-tui"     "$DEST/profile-catalog.ini"     "$DEST/profile.example.ini"     "$DEST/pihm-installer"
+
+  printf 'Removed pihm program files and command links.\n'
+  printf 'Preserved Pi-hole data, gravity.db, profiles.d, backups, and Compose files.\n'
+  exit 0
+fi
+
+need python3
+need install
+need mktemp
+
+SCRIPT_DIR="$(
+  cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd
+)"
+
+LOCAL_SOURCE=0
+if [[ -f "$SCRIPT_DIR/pihole-profile-manager" &&
+      -f "$SCRIPT_DIR/pihole-profile-tui" &&
+      -f "$SCRIPT_DIR/profile-catalog.ini" ]]; then
+  LOCAL_SOURCE=1
+else
+  need curl
+fi
+
+mkdir -p "$DEST" "$DEST/profiles.d" "$BINDIR"
+
+stage="$(mktemp -d)"
+cleanup() {
+  rm -rf -- "$stage"
+}
+trap cleanup EXIT
+
+printf 'pihm installer\n'
+printf '  source: %s@%s\n' "$REPO" "$REF"
+printf '  home:   %s\n' "$DEST"
+printf '  command:%s/%s\n\n' "$BINDIR" "$COMMAND"
+
+for f in "${FILES[@]}"; do
+  if (( LOCAL_SOURCE )); then
+    [[ -f "$SCRIPT_DIR/$f" ]] || {
+      [[ "$f" == "pihm-installer" ]] || die "Missing local source file: $SCRIPT_DIR/$f"
+      cp -- "${BASH_SOURCE[0]}" "$stage/$f"
+      continue
+    }
+    cp -- "$SCRIPT_DIR/$f" "$stage/$f"
+  else
+    curl -fsSL "$RAW_BASE/$f" -o "$stage/$f"
+  fi
+done
+
+python3 -m py_compile   "$stage/pihole-profile-manager"   "$stage/pihole-profile-tui"
+
+bash -n "$stage/pihm-installer"
+
+stamp="$(date '+%Y%m%d-%H%M%S')"
+for f in pihole-profile-manager pihole-profile-tui profile-catalog.ini profile.example.ini pihm-installer; do
+  if [[ -e "$DEST/$f" ]] && ! cmp -s "$stage/$f" "$DEST/$f"; then
+    cp -a -- "$DEST/$f" "$DEST/${f}.backup-${stamp}"
+    printf 'Backup: %s\n' "$DEST/${f}.backup-${stamp}"
+  fi
+done
+
+install -m 0755 "$stage/pihole-profile-manager" "$DEST/pihole-profile-manager"
+install -m 0755 "$stage/pihole-profile-tui" "$DEST/pihole-profile-tui"
+install -m 0644 "$stage/profile-catalog.ini" "$DEST/profile-catalog.ini"
+install -m 0644 "$stage/profile.example.ini" "$DEST/profile.example.ini"
+install -m 0755 "$stage/pihm-installer" "$DEST/pihm-installer"
+
+ln -sfn "$DEST/pihole-profile-manager" "$BINDIR/$COMMAND"
+ln -sfn "$DEST/pihm-installer" "$BINDIR/pihm-installer"
+
+printf '\nInstalled successfully.\n'
+printf 'Run the TUI from anywhere with:\n\n'
+printf '  %s\n\n' "$COMMAND"
+printf 'Update later with:\n\n'
+printf '  pihm-installer update\n\n'
+printf 'Profile files remain in: %s/profiles.d\n' "$DEST"
