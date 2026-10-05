@@ -247,6 +247,14 @@ Both addresses select the same Pi-hole policy. The LAN address is used when the 
 
 `pihm` does not silently guess uncertain LAN matches. If Tailscale cannot provide a direct same-LAN endpoint and the hostname cannot be matched confidently, the TUI shows discovered LAN clients for explicit selection.
 
+## Optional web interface
+
+`pihm-web` is an optional browser interface for the same profile/client data managed by `pihm`.
+
+The TUI remains supported and independent. The web interface is intended for frequent client assignment from a phone or desktop browser.
+
+See [PIHM-WEB.md](PIHM-WEB.md) for the testing-branch install and access instructions.
+
 ## Daily blocklist updates
 
 Pi-hole does not continuously stream changes from the configured list URLs. Gravity fetches the current contents when a Gravity rebuild runs.
