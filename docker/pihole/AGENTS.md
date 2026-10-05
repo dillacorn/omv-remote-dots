@@ -23,7 +23,8 @@ Follow the same documentation discipline used in Awtarchy:
 - keep deep troubleshooting and networking detail in `NETWORKING.md`;
 - keep durable agent rules here;
 - do not dump debugging chronology into user-facing docs;
-- do not repeat the same procedure across multiple files unless the extra context is necessary.
+- do not repeat the same procedure across multiple files unless the extra context is necessary;
+- do not add decorative meta-commentary such as "inspired by", implementation-history references, or self-referential design notes to user-facing UI unless they provide real operational value.
 
 Prefer one safe command block over several fragmented commands when a server change is required.
 
