@@ -197,6 +197,10 @@ def timer(action,calendar):
 
 def main():
     global DB,CONTAINER,PROFILES,CATALOG
+    if len(sys.argv)==1 and sys.stdin.isatty() and sys.stdout.isatty():
+        tui=Path(__file__).resolve().with_name("pihole-profile-tui")
+        if tui.is_file():
+            os.execv(sys.executable,[sys.executable,str(tui)])
     p=argparse.ArgumentParser(); p.add_argument("--db",type=Path,default=DB); p.add_argument("--container",default=CONTAINER); p.add_argument("--profiles-dir",type=Path,default=PROFILES); p.add_argument("--catalog",type=Path,default=CATALOG); s=p.add_subparsers(dest="cmd",required=True)
     s.add_parser("list"); q=s.add_parser("show"); q.add_argument("name"); q=s.add_parser("new"); q.add_argument("name"); q.add_argument("--preset",choices=PRESETS); q.add_argument("--clone"); q.add_argument("--force",action="store_true"); q=s.add_parser("edit"); q.add_argument("name"); q=s.add_parser("capture"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--overwrite",action="store_true"); q=s.add_parser("apply"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--gravity",action="store_true"); q=s.add_parser("assign"); q.add_argument("name"); q.add_argument("address"); q.add_argument("--label",default=""); q=s.add_parser("unassign"); q.add_argument("address"); s.add_parser("status"); s.add_parser("gravity"); q=s.add_parser("timer"); q.add_argument("action",choices=["install","remove","status"]); q.add_argument("--on-calendar",default="*-*-* 03:15:00")
     a=p.parse_args(); DB=a.db; CONTAINER=a.container; PROFILES=a.profiles_dir; CATALOG=a.catalog; cat=catalog(); PROFILES.mkdir(parents=True,exist_ok=True)
