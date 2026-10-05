@@ -1,0 +1,657 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import base64
+import configparser
+import hashlib
+import hmac
+import html
+import ipaddress
+import json
+import os
+import secrets
+import sqlite3
+import subprocess
+import sys
+import time
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
+
+HOME = Path(os.environ.get("PIHM_HOME", "/docker/pihole"))
+MANAGER = Path(os.environ.get("PIHOLE_PROFILE_MANAGER", str(HOME / "pihole-profile-manager")))
+PROFILES = Path(os.environ.get("PIHOLE_PROFILES_DIR", str(HOME / "profiles.d")))
+FTL_DB = Path(os.environ.get("PIHOLE_FTL_DB", str(HOME / "etc-pihole/pihole-FTL.db")))
+
+BIND = os.environ.get("PIHM_WEB_BIND", "127.0.0.1")
+PORT = int(os.environ.get("PIHM_WEB_PORT", "8091"))
+USERNAME = os.environ.get("PIHM_WEB_USERNAME", "admin")
+PASSWORD = os.environ.get("PIHM_WEB_PASSWORD", "")
+CSRF = secrets.token_urlsafe(32)
+MAX_BODY = 16 * 1024
+
+
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def run(argv: list[str], timeout: int = 10) -> str:
+    try:
+        return subprocess.check_output(
+            argv,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def run_checked(argv: list[str], timeout: int = 45) -> None:
+    subprocess.run(argv, check=True, timeout=timeout)
+
+
+def load_profile(path: Path) -> dict:
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    with path.open(encoding="utf-8") as fh:
+        cfg.read_file(fh)
+
+    name = cfg.get("profile", "name", fallback=path.stem).strip() or path.stem
+    is_default = cfg.getboolean("profile", "default", fallback=False)
+    clients = []
+    for raw in cfg.get("clients", "entries", fallback="").splitlines():
+        raw = raw.strip()
+        if not raw or raw.startswith(("#", ";")):
+            continue
+        address, sep, label = raw.partition("|")
+        clients.append((address.strip(), label.strip() if sep else ""))
+
+    keys = [
+        x.strip()
+        for x in cfg.get("lists", "keys", fallback="").splitlines()
+        if x.strip() and not x.lstrip().startswith(("#", ";"))
+    ]
+
+    return {
+        "path": path,
+        "name": name,
+        "default": is_default,
+        "clients": clients,
+        "lists": len(keys),
+    }
+
+
+def profiles() -> list[dict]:
+    PROFILES.mkdir(parents=True, exist_ok=True)
+    out = []
+    for path in sorted(PROFILES.glob("*.ini")):
+        try:
+            out.append(load_profile(path))
+        except Exception:
+            continue
+    return out
+
+
+def neighbor_map() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in run(["ip", "neigh", "show"]).splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            ipaddress.ip_address(parts[0])
+        except ValueError:
+            continue
+        if "lladdr" not in parts:
+            continue
+        try:
+            out[parts[0]] = parts[parts.index("lladdr") + 1].lower()
+        except (ValueError, IndexError):
+            pass
+    return out
+
+
+def recent_lan_clients() -> list[dict]:
+    found: dict[str, dict] = {}
+    macs = neighbor_map()
+
+    if FTL_DB.is_file():
+        try:
+            db = sqlite3.connect(f"file:{FTL_DB}?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "network_addresses" in tables:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(network_addresses)")}
+                if "ip" in cols:
+                    name_expr = "name" if "name" in cols else "''"
+                    seen_expr = "lastSeen" if "lastSeen" in cols else "0"
+                    query = f"SELECT ip,{name_expr} AS name,{seen_expr} AS lastSeen FROM network_addresses"
+                    for row in db.execute(query):
+                        value = str(row["ip"] or "")
+                        try:
+                            ip = ipaddress.ip_address(value)
+                        except ValueError:
+                            continue
+                        if ip.version != 4 or not ip.is_private:
+                            continue
+                        found[value] = {
+                            "ip": value,
+                            "name": str(row["name"] or ""),
+                            "last_seen": int(row["lastSeen"] or 0),
+                            "mac": macs.get(value, ""),
+                        }
+            db.close()
+        except Exception:
+            pass
+
+    for value, mac in macs.items():
+        try:
+            ip = ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        if ip.version != 4 or not ip.is_private:
+            continue
+        found.setdefault(
+            value,
+            {"ip": value, "name": "", "last_seen": 0, "mac": mac},
+        )
+        if mac:
+            found[value]["mac"] = mac
+
+    def sort_key(item: dict):
+        parts = tuple(int(x) for x in item["ip"].split("."))
+        return (-int(item["last_seen"] or 0), parts)
+
+    return sorted(found.values(), key=sort_key)
+
+
+def tailscale_devices() -> list[dict]:
+    raw = run(["tailscale", "status", "--json"])
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+
+    peers = data.get("Peer", {})
+    nodes = list(peers.values()) if isinstance(peers, dict) else list(peers or [])
+    out = []
+
+    for node in nodes:
+        ipv4 = ""
+        for value in node.get("TailscaleIPs") or []:
+            try:
+                ip = ipaddress.ip_address(value)
+            except ValueError:
+                continue
+            if ip.version == 4:
+                ipv4 = str(ip)
+                break
+        if not ipv4:
+            continue
+
+        dns = str(node.get("DNSName") or "").rstrip(".")
+        host = str(node.get("HostName") or "").strip()
+        name = host or (dns.split(".", 1)[0] if dns else ipv4)
+
+        out.append({
+            "name": name,
+            "dns": dns,
+            "ip": ipv4,
+            "online": bool(node.get("Online", False)),
+        })
+
+    return sorted(out, key=lambda d: (not d["online"], d["name"].casefold()))
+
+
+def age_text(value: int) -> str:
+    if not value:
+        return "seen on LAN"
+    age = max(0, int(time.time()) - int(value))
+    if age < 60:
+        return "just now"
+    if age < 3600:
+        return f"{age // 60}m ago"
+    if age < 86400:
+        return f"{age // 3600}h ago"
+    return f"{age // 86400}d ago"
+
+
+def upstream_text() -> str:
+    raw = run(["docker", "inspect", "dnsproxy", "--format", "{{json .Config.Cmd}}"])
+    if not raw:
+        raw = run(["docker", "inspect", "dnsproxy-quad9", "--format", "{{json .Config.Cmd}}"])
+    if "dns.quad9.net" in raw:
+        return "Quad9 DoH"
+    if "dns.nextdns.io" in raw:
+        return "NextDNS DoH"
+    return "Custom / unavailable"
+
+
+def manager(*args: str) -> None:
+    if not MANAGER.is_file():
+        fail(f"pihole-profile-manager not found: {MANAGER}")
+    run_checked([str(MANAGER), *args])
+
+
+def valid_profile(name: str) -> bool:
+    return any(p["name"] == name for p in profiles())
+
+
+def valid_address(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def h(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def auth_ok(header: str | None) -> bool:
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        user, sep, password = decoded.partition(":")
+        if not sep:
+            return False
+    except Exception:
+        return False
+
+    return (
+        hmac.compare_digest(user, USERNAME)
+        and hmac.compare_digest(
+            hashlib.sha256(password.encode()).digest(),
+            hashlib.sha256(PASSWORD.encode()).digest(),
+        )
+    )
+
+
+def profile_options(current: str = "") -> str:
+    rows = []
+    for p in profiles():
+        selected = " selected" if p["name"] == current else ""
+        marker = " [DEFAULT]" if p["default"] else ""
+        rows.append(f'<option value="{h(p["name"])}"{selected}>{h(p["name"] + marker)}</option>')
+    return "".join(rows)
+
+
+def action_form(action: str, fields: dict[str, str], label: str, select_profile: bool = False) -> str:
+    hidden = [
+        f'<input type="hidden" name="csrf" value="{h(CSRF)}">',
+    ]
+    for key, value in fields.items():
+        hidden.append(f'<input type="hidden" name="{h(key)}" value="{h(value)}">')
+    select = (
+        f'<select name="profile">{profile_options()}</select>'
+        if select_profile
+        else ""
+    )
+    return (
+        f'<form method="post" action="{h(action)}" class="inline">'
+        + "".join(hidden)
+        + select
+        + f'<button type="submit">{h(label)}</button></form>'
+    )
+
+
+def render(message: str = "", error: bool = False) -> str:
+    ps = profiles()
+    macs = neighbor_map()
+    assigned = []
+    assigned_addresses = set()
+
+    for p in ps:
+        for address, label in p["clients"]:
+            assigned_addresses.add(address)
+            assigned.append({
+                "address": address,
+                "label": label,
+                "profile": p["name"],
+                "mac": macs.get(address, ""),
+            })
+
+    profile_cards = []
+    for p in ps:
+        default = '<span class="tag">DEFAULT</span>' if p["default"] else ""
+        set_default = "" if p["default"] else action_form(
+            "/default", {"profile": p["name"]}, "Make default"
+        )
+        sync = action_form("/sync", {"profile": p["name"]}, "Sync")
+        profile_cards.append(
+            f"""<div class="card">
+              <div class="card-title">{h(p["name"])} {default}</div>
+              <div class="muted">{p["lists"]} blocklists · {len(p["clients"])} client addresses</div>
+              <div class="actions">{set_default}{sync}</div>
+            </div>"""
+        )
+
+    assigned_rows = []
+    for item in sorted(assigned, key=lambda x: (x["profile"].casefold(), x["address"])):
+        remove = action_form("/unassign", {"address": item["address"]}, "Remove")
+        assigned_rows.append(
+            f"""<tr>
+              <td>{h(item["label"] or "—")}</td>
+              <td><code>{h(item["address"])}</code></td>
+              <td><code>{h(item["mac"] or "—")}</code></td>
+              <td>{h(item["profile"])}</td>
+              <td>{remove}</td>
+            </tr>"""
+        )
+
+    lan_rows = []
+    for item in recent_lan_clients():
+        if item["ip"] in assigned_addresses:
+            continue
+        assign = action_form(
+            "/assign",
+            {
+                "address": item["ip"],
+                "label": item["name"] or f"LAN device {item['ip']}",
+            },
+            "Assign",
+            select_profile=True,
+        )
+        reserve = (
+            f'Reserve <code>{h(item["ip"])}</code> for <code>{h(item["mac"])}</code> on the router.'
+            if item["mac"]
+            else "MAC not currently visible in the neighbor table."
+        )
+        lan_rows.append(
+            f"""<tr>
+              <td>{h(item["name"] or "Unknown")}</td>
+              <td><code>{h(item["ip"])}</code></td>
+              <td><code>{h(item["mac"] or "—")}</code></td>
+              <td>{h(age_text(item["last_seen"]))}<div class="hint">{reserve}</div></td>
+              <td>{assign}</td>
+            </tr>"""
+        )
+
+    tail_rows = []
+    for item in tailscale_devices():
+        if item["ip"] in assigned_addresses:
+            continue
+        assign = action_form(
+            "/assign",
+            {
+                "address": item["ip"],
+                "label": f"{item['name']} - Tailscale",
+            },
+            "Assign",
+            select_profile=True,
+        )
+        tail_rows.append(
+            f"""<tr>
+              <td>{h(item["name"])}</td>
+              <td><code>{h(item["ip"])}</code></td>
+              <td>{h("Online" if item["online"] else "Offline")}</td>
+              <td>{assign}</td>
+            </tr>"""
+        )
+
+    default_name = next((p["name"] for p in ps if p["default"]), "Not configured")
+    notice = ""
+    if message:
+        cls = "notice error" if error else "notice"
+        notice = f'<div class="{cls}">{h(message)}</div>'
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pihm-web</title>
+<style>
+:root {{
+  color-scheme: dark;
+  --bg:#111417; --panel:#1a1f24; --line:#303840; --text:#eef2f5;
+  --muted:#9da7b0; --accent:#60e6e6; --danger:#ff8c8c;
+}}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }}
+main {{ max-width:1200px; margin:0 auto; padding:24px; }}
+h1 {{ margin:0; font-size:28px; }}
+h2 {{ margin:30px 0 12px; font-size:20px; }}
+.top {{ display:flex; gap:16px; justify-content:space-between; align-items:end; flex-wrap:wrap; }}
+.status {{ color:var(--muted); }}
+.grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }}
+.card {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }}
+.card-title {{ font-weight:700; font-size:17px; }}
+.tag {{ font-size:11px; border:1px solid var(--accent); color:var(--accent); padding:2px 6px; border-radius:999px; }}
+.muted,.hint {{ color:var(--muted); }}
+.hint {{ font-size:12px; margin-top:4px; max-width:420px; }}
+.actions {{ margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }}
+.notice {{ margin:18px 0; padding:12px; border:1px solid var(--accent); border-radius:8px; }}
+.notice.error {{ border-color:var(--danger); color:var(--danger); }}
+.table-wrap {{ overflow:auto; border:1px solid var(--line); border-radius:10px; }}
+table {{ width:100%; border-collapse:collapse; min-width:720px; }}
+th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }}
+th {{ color:var(--muted); font-weight:600; background:var(--panel); }}
+tr:last-child td {{ border-bottom:0; }}
+form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
+select,button {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:7px 9px; }}
+button {{ cursor:pointer; }}
+button:hover {{ border-color:var(--accent); }}
+code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
+.empty {{ color:var(--muted); padding:14px; border:1px dashed var(--line); border-radius:10px; }}
+footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div>
+      <h1>pihm-web</h1>
+      <div class="status">Pi-hole profile manager</div>
+    </div>
+    <div class="status">
+      Default: <strong>{h(default_name)}</strong><br>
+      Upstream: <strong>{h(upstream_text())}</strong>
+    </div>
+  </div>
+
+  {notice}
+
+  <h2>Profiles</h2>
+  <div class="grid">{''.join(profile_cards) or '<div class="empty">No profiles found.</div>'}</div>
+
+  <h2>Assigned clients</h2>
+  {('<div class="table-wrap"><table><thead><tr><th>Client</th><th>Address</th><th>MAC</th><th>Profile</th><th></th></tr></thead><tbody>' + ''.join(assigned_rows) + '</tbody></table></div>') if assigned_rows else '<div class="empty">No assigned clients.</div>'}
+
+  <h2>Discovered LAN clients</h2>
+  <div class="status">Reserve a LAN IPv4/MAC on the router before relying on that address for a permanent profile assignment.</div>
+  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>LAN IPv4</th><th>MAC</th><th>Seen</th><th>Profile</th></tr></thead><tbody>' + ''.join(lan_rows) + '</tbody></table></div>') if lan_rows else '<div class="empty">No unassigned LAN clients currently discovered.</div>'}
+
+  <h2>Tailscale clients</h2>
+  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailscale IPv4</th><th>Status</th><th>Profile</th></tr></thead><tbody>' + ''.join(tail_rows) + '</tbody></table></div>') if tail_rows else '<div class="empty">No unassigned Tailscale clients currently discovered.</div>'}
+
+  <footer>
+    pihm-web uses the existing pihm manager for writes, backups, Pi-hole reloads, and profile rules.
+    The web service listens on localhost by default.
+  </footer>
+</main>
+</body>
+</html>"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "pihm-web"
+
+    def log_message(self, fmt: str, *args) -> None:
+        sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+
+    def secure_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+
+    def require_auth(self) -> bool:
+        if auth_ok(self.headers.get("Authorization")):
+            return True
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("WWW-Authenticate", 'Basic realm="pihm-web"')
+        self.secure_headers()
+        self.end_headers()
+        return False
+
+    def send_html(self, body: str, status: int = 200) -> None:
+        data = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.secure_headers()
+        self.end_headers()
+        self.wfile.write(data)
+
+    def redirect(self, message: str, error: bool = False) -> None:
+        target = "/?message=" + quote(message)
+        if error:
+            target += "&error=1"
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", target)
+        self.secure_headers()
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        if not self.require_auth():
+            return
+        parsed = urlparse(self.path)
+        if parsed.path not in {"/", "/index.html"}:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        q = parse_qs(parsed.query)
+        message = q.get("message", [""])[0][:500]
+        error = q.get("error", ["0"])[0] == "1"
+        self.send_html(render(message, error))
+
+    def post_data(self) -> dict[str, str]:
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            size = 0
+        if size <= 0 or size > MAX_BODY:
+            fail("invalid request size")
+        raw = self.rfile.read(size).decode("utf-8", errors="strict")
+        parsed = parse_qs(raw, keep_blank_values=True)
+        return {key: values[0] if values else "" for key, values in parsed.items()}
+
+    def do_POST(self) -> None:
+        if not self.require_auth():
+            return
+
+        try:
+            data = self.post_data()
+            if not hmac.compare_digest(data.get("csrf", ""), CSRF):
+                fail("invalid CSRF token")
+
+            path = urlparse(self.path).path
+
+            if path == "/assign":
+                profile = data.get("profile", "").strip()
+                address = data.get("address", "").strip()
+                label = data.get("label", "").strip()[:120]
+                if not valid_profile(profile):
+                    fail("profile not found")
+                if not valid_address(address):
+                    fail("invalid client address")
+                args = ["assign", profile, address]
+                if label:
+                    args += ["--label", label]
+                manager(*args)
+                self.redirect(f"{address} assigned to {profile}")
+                return
+
+            if path == "/unassign":
+                address = data.get("address", "").strip()
+                if not valid_address(address):
+                    fail("invalid client address")
+                manager("unassign", address)
+                self.redirect(f"{address} returned to Default")
+                return
+
+            if path == "/default":
+                profile = data.get("profile", "").strip()
+                if not valid_profile(profile):
+                    fail("profile not found")
+                manager("default", profile)
+                self.redirect(f"Default fallback set to {profile}")
+                return
+
+            if path == "/sync":
+                profile = data.get("profile", "").strip()
+                if not valid_profile(profile):
+                    fail("profile not found")
+                manager("apply", profile)
+                self.redirect(f"{profile} synced to Pi-hole")
+                return
+
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+        except subprocess.CalledProcessError as exc:
+            self.redirect(f"pihm command failed with status {exc.returncode}", True)
+        except Exception as exc:
+            self.redirect(str(exc), True)
+
+
+def check() -> int:
+    problems = []
+    if not MANAGER.is_file():
+        problems.append(f"missing manager: {MANAGER}")
+    if not PROFILES.is_dir():
+        problems.append(f"missing profiles directory: {PROFILES}")
+    if not FTL_DB.is_file():
+        problems.append(f"missing Pi-hole FTL database: {FTL_DB}")
+    if not PASSWORD:
+        problems.append("PIHM_WEB_PASSWORD is not set")
+
+    if problems:
+        for item in problems:
+            print(f"ERROR: {item}")
+        return 1
+
+    print("pihm-web check: OK")
+    print(f"Manager:  {MANAGER}")
+    print(f"Profiles: {PROFILES}")
+    print(f"FTL DB:   {FTL_DB}")
+    print(f"Bind:     {BIND}:{PORT}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Simple web UI for pihm")
+    parser.add_argument("--check", action="store_true", help="validate local prerequisites and exit")
+    args = parser.parse_args()
+
+    if args.check:
+        return check()
+
+    if not PASSWORD:
+        print("ERROR: PIHM_WEB_PASSWORD must be set", file=sys.stderr)
+        return 2
+
+    if not MANAGER.is_file():
+        print(f"ERROR: pihole-profile-manager not found: {MANAGER}", file=sys.stderr)
+        return 2
+
+    server = ThreadingHTTPServer((BIND, PORT), Handler)
+    print(f"pihm-web listening on http://{BIND}:{PORT}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
