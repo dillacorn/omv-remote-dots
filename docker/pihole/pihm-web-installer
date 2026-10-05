@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Optional pihm-web installer.
+#
+# pihm-web stays separate from the pihm TUI. It installs a localhost-only
+# systemd service by default and does not alter Pi-hole, nginx, firewall,
+# Tailscale Serve, or router settings automatically.
+
+set -euo pipefail
+
+REPO="${PIHM_WEB_REPO:-dillacorn/omv-remote-dots}"
+REF="${PIHM_WEB_REF:-main}"
+HOME="${PIHM_HOME:-/docker/pihole}"
+BINDIR="${PIHM_WEB_BINDIR:-/usr/local/bin}"
+ENV_FILE="${PIHM_WEB_ENV_FILE:-/etc/pihm-web.env}"
+SERVICE_FILE="/etc/systemd/system/pihm-web.service"
+ACTION="${1:-install}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${REF}/docker/pihole"
+
+die() {
+    printf 'ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run as root (or with sudo)."
+
+case "$ACTION" in
+    install|update|uninstall|status) ;;
+    *) die "Usage: pihm-web-installer [install|update|uninstall|status]" ;;
+esac
+
+if [[ "$ACTION" == "status" ]]; then
+    systemctl status pihm-web.service --no-pager
+    exit $?
+fi
+
+if [[ "$ACTION" == "uninstall" ]]; then
+    systemctl disable --now pihm-web.service >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE" "$BINDIR/pihm-web" "$BINDIR/pihm-web-installer"
+    rm -f "$HOME/pihm-web" "$HOME/pihm-web-installer"
+    systemctl daemon-reload
+    printf 'Removed pihm-web program/service files.\n'
+    printf 'Preserved %s so credentials/settings are not silently destroyed.\n' "$ENV_FILE"
+    exit 0
+fi
+
+need curl
+need install
+need python3
+need systemctl
+
+[[ -x "$HOME/pihole-profile-manager" ]] || die "Install pihm first; missing $HOME/pihole-profile-manager"
+
+mkdir -p "$HOME" "$BINDIR"
+
+stage="$(mktemp -d)"
+trap 'rm -rf -- "$stage"' EXIT
+
+curl -fsSL "$RAW_BASE/pihm-web" -o "$stage/pihm-web"
+curl -fsSL "$RAW_BASE/pihm-web-installer" -o "$stage/pihm-web-installer"
+
+python3 -m py_compile "$stage/pihm-web"
+bash -n "$stage/pihm-web-installer"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    password="$(
+        python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(24))
+PY
+    )"
+    umask 077
+    cat >"$ENV_FILE" <<EOF
+PIHM_WEB_BIND=127.0.0.1
+PIHM_WEB_PORT=8091
+PIHM_WEB_USERNAME=admin
+PIHM_WEB_PASSWORD=$password
+EOF
+    chmod 0600 "$ENV_FILE"
+    printf 'Created %s\n' "$ENV_FILE"
+    printf 'Initial username: admin\n'
+    printf 'Initial password: %s\n' "$password"
+    printf 'Store that password now.\n'
+fi
+
+install -m 0755 "$stage/pihm-web" "$HOME/pihm-web"
+install -m 0755 "$stage/pihm-web-installer" "$HOME/pihm-web-installer"
+ln -sfn "$HOME/pihm-web" "$BINDIR/pihm-web"
+ln -sfn "$HOME/pihm-web-installer" "$BINDIR/pihm-web-installer"
+
+cat >"$SERVICE_FILE" <<EOF
+[Unit]
+Description=pihm web interface
+After=docker.service tailscaled.service
+Wants=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=$ENV_FILE
+ExecStart=$HOME/pihm-web
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now pihm-web.service
+
+PIHM_WEB_PASSWORD="$(
+    sed -n 's/^PIHM_WEB_PASSWORD=//p' "$ENV_FILE" | head -n1
+)" "$HOME/pihm-web" --check
+
+printf '\npihm-web installed.\n'
+printf 'Local backend: http://127.0.0.1:8091\n'
+printf 'Status: pihm-web-installer status\n'
+printf '\nThe service is localhost-only by default.\n'
+printf 'Use SSH port forwarding or Tailscale Serve for remote browser access.\n'
