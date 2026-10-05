@@ -37,11 +37,13 @@ services:
 
   dnsproxy:
     image: adguard/dnsproxy:latest
-    container_name: dnsproxy-quad9
+    container_name: dnsproxy
     network_mode: "service:pihole"
     command:
       - "--listen=127.0.0.1"
       - "--port=5053"
+      # Recommended/default upstream: Quad9 encrypted DoH.
+      # Pi-hole remains the filtering and per-client policy layer.
       - "--upstream=https://dns.quad9.net/dns-query"
       - "--bootstrap=9.9.9.9:53"
       - "--bootstrap=149.112.112.112:53"
