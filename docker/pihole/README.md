@@ -219,6 +219,20 @@ Status/remove:
 
 This updates blocklists only. It does not auto-update the Pi-hole container.
 
+## IPv6 LAN DNS
+
+For direct LAN IPv6 reachability, Pi-hole can use the optional IPv6-only macvlan overlay:
+
+```text
+compose.ipv6-dns.yml
+```
+
+This keeps the normal Docker bridge IPv4-only while giving Pi-hole a real IPv6 address on the LAN. The overlay is intentionally variable-driven because residential DHCPv6 Prefix Delegation can change the LAN prefix.
+
+Before using it, read [NETWORKING.md](NETWORKING.md). That guide records the validated AT&T BGW320 + stock ASUSWRT behavior, DHCPv6-PD setup, Tailscale interaction, RDNSS/client-identity limitation, security constraints, troubleshooting commands, and prefix-change procedure.
+
+Future agents working in this directory must also read [AGENTS.md](AGENTS.md).
+
 ## Tailscale DNS endpoint
 
 The base Compose file binds DNS only to the LAN IP. To make the same Pi-hole available as a tailnet DNS resolver without exposing port 53 publicly, add the optional Tailscale overlay:
