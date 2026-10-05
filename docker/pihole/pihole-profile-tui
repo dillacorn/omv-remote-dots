@@ -12,11 +12,13 @@ import shutil
 import subprocess
 import sys
 import termios
+import time
 import tty
 from pathlib import Path
 
 MANAGER_DEFAULT = Path(os.environ.get("PIHOLE_PROFILE_MANAGER", "/docker/pihole/pihole-profile-manager"))
 ARACHNIDIUM_DIR = Path(os.environ.get("ARACHNIDIUM_DIR", "/docker/arachnidium"))
+FTL_DB = Path(os.environ.get("PIHOLE_FTL_DB", "/docker/pihole/etc-pihole/pihole-FTL.db"))
 RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; CYAN="\033[36m"; GREEN="\033[32m"; RED="\033[31m"; REV="\033[7m"
 
 
@@ -172,28 +174,371 @@ def edit_values(path,section,opt,name):
             vals.pop(c); set_lines(path,section,opt,vals); pos=max(0,c-1)
 
 
+def _rfc1918_ipv4(value):
+    try:
+        ip=ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if ip.version!=4:
+        return False
+    return (
+        ip in ipaddress.ip_network("10.0.0.0/8")
+        or ip in ipaddress.ip_network("172.16.0.0/12")
+        or ip in ipaddress.ip_network("192.168.0.0/16")
+    )
+
+
+def _norm_device_name(value):
+    value=(value or "").strip().rstrip(".").split(".",1)[0].casefold()
+    value=re.sub(r"[^a-z0-9]+","",value)
+    return re.sub(r"\d+$","",value)
+
+
+def _private_ip_from_endpoint(value):
+    value=(value or "").strip()
+    if not value:
+        return ""
+    if value.startswith("["):
+        host=value[1:].split("]",1)[0]
+    else:
+        host=value.rsplit(":",1)[0] if ":" in value else value
+    return host if _rfc1918_ipv4(host) else ""
+
+
+def tailscale_devices():
+    raw=command_output(["tailscale","status","--json"])
+    if not raw:
+        return []
+    try:
+        data=json.loads(raw)
+    except Exception:
+        return []
+    nodes=[]
+    peers=data.get("Peer",{})
+    if isinstance(peers,dict):
+        nodes.extend(peers.values())
+    elif isinstance(peers,list):
+        nodes.extend(peers)
+    out=[]
+    for node in nodes:
+        ips=[]
+        for addr in node.get("TailscaleIPs") or []:
+            try:
+                ip=ipaddress.ip_address(addr)
+            except ValueError:
+                continue
+            if ip.version==4:
+                ips.append(str(ip))
+        if not ips:
+            continue
+        dns=(node.get("DNSName") or "").rstrip(".")
+        host=(node.get("HostName") or "").strip()
+        name=host or (dns.split(".",1)[0] if dns else ips[0])
+        lan=[]
+        direct=_private_ip_from_endpoint(node.get("CurAddr"))
+        if direct:
+            lan.append(direct)
+        for endpoint in node.get("Endpoints") or []:
+            cand=_private_ip_from_endpoint(endpoint)
+            if cand and cand not in lan:
+                lan.append(cand)
+        out.append({
+            "name":name,
+            "dns":dns,
+            "tailscale_ips":ips,
+            "lan_candidates":lan,
+            "online":bool(node.get("Online",False)),
+            "active":bool(node.get("Active",False)),
+        })
+    return sorted(out,key=lambda d:(not d["online"],d["name"].casefold()))
+
+
+def recent_lan_clients():
+    found={}
+    if FTL_DB.is_file():
+        try:
+            import sqlite3
+            db=sqlite3.connect(f"file:{FTL_DB}?mode=ro",uri=True)
+            db.row_factory=sqlite3.Row
+            tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "network_addresses" in tables:
+                cols={r[1] for r in db.execute("PRAGMA table_info(network_addresses)")}
+                if "ip" in cols:
+                    name_expr="name" if "name" in cols else "''"
+                    seen_expr="lastSeen" if "lastSeen" in cols else "0"
+                    q=f"SELECT ip,{name_expr} AS name,{seen_expr} AS lastSeen FROM network_addresses"
+                    for row in db.execute(q):
+                        ip=str(row["ip"] or "")
+                        if not _rfc1918_ipv4(ip):
+                            continue
+                        found[ip]={
+                            "ip":ip,
+                            "name":str(row["name"] or ""),
+                            "last_seen":int(row["lastSeen"] or 0),
+                            "source":"Pi-hole",
+                        }
+            db.close()
+        except Exception:
+            pass
+    raw=command_output(["ip","neigh","show"])
+    for line in raw.splitlines():
+        parts=line.split()
+        if not parts or not _rfc1918_ipv4(parts[0]):
+            continue
+        ip=parts[0]
+        item=found.setdefault(ip,{"ip":ip,"name":"","last_seen":0,"source":"LAN"})
+        if item["source"]!="Pi-hole":
+            item["source"]="LAN"
+    return sorted(found.values(),key=lambda d:(-d["last_seen"],tuple(int(x) for x in d["ip"].split("."))))
+
+
+def _age_text(last_seen):
+    if not last_seen:
+        return "seen on LAN"
+    age=max(0,int(time.time())-int(last_seen))
+    if age<60:
+        return "seen just now"
+    if age<3600:
+        return f"seen {age//60}m ago"
+    if age<86400:
+        return f"seen {age//3600}h ago"
+    return f"seen {age//86400}d ago"
+
+
+def _lan_label(item):
+    extra=f"  {item['name']}" if item.get("name") else ""
+    return f"{item['ip']:<15}{extra:<28} {_age_text(item.get('last_seen',0))}"
+
+
+def _saved_profile_owners(address,exclude_path=None):
+    owners=[]
+    for other_path in M["pfiles"]():
+        if exclude_path is not None and other_path==exclude_path:
+            continue
+        try:
+            p=M["load"](other_path,CAT)
+        except BaseException:
+            continue
+        if any(addr==address for addr,_ in p["clients"]):
+            owners.append((other_path,p["name"]))
+    return owners
+
+
+def _remove_address_from_profile(path,address):
+    vals=lines(path,"clients","entries")
+    kept=[]
+    changed=False
+    for raw in vals:
+        addr,sep,label=raw.partition("|")
+        if addr.strip()==address:
+            changed=True
+            continue
+        kept.append(raw)
+    if changed:
+        set_lines(path,"clients","entries",kept)
+    return changed
+
+
+def _save_linked_addresses(path,entries):
+    current=lines(path,"clients","entries")
+    parsed=[]
+    for raw in current:
+        addr,sep,label=raw.partition("|")
+        parsed.append((addr.strip(),label.strip() if sep else ""))
+    for address,label in entries:
+        owners=_saved_profile_owners(address,path)
+        if owners:
+            names=", ".join(name for _,name in owners)
+            if not confirm(f"{address} is already saved in:\n\n{names}\n\nMove it to this profile?"):
+                continue
+            for owner_path,_ in owners:
+                _remove_address_from_profile(owner_path,address)
+        parsed=[(a,l) for a,l in parsed if a!=address]
+        parsed.append((address,label))
+    set_lines(path,"clients","entries",[f"{a} | {l}" if l else a for a,l in parsed])
+
+
+def _sync_after_link(path):
+    c=menu("Device linked",[
+        "Sync to Pi-hole now   recommended",
+        "Save only             sync later",
+    ],"The device addresses are saved in this profile.")
+    if c==0:
+        p=M["load"](path,CAT)
+        def work():
+            M["apply_one"](p,CAT)
+            M["reload"](False)
+        external("Sync device to Pi-hole",work)
+
+
+def _choose_lan_client(candidates,title="Choose LAN address"):
+    if not candidates:
+        show_text(title,"No recent LAN clients were discovered by Pi-hole or the server neighbor table.")
+        return None
+    items=[_lan_label(x) for x in candidates]+["Skip LAN address","Back"]
+    c=menu(title,items,"Most recently seen clients are listed first.")
+    if c is None or c>=len(candidates):
+        return None
+    return candidates[c]["ip"]
+
+
+def _auto_lan_for_tail_device(device,candidates):
+    direct=[ip for ip in device.get("lan_candidates",[]) if _rfc1918_ipv4(ip)]
+    if direct:
+        return direct[0],"Tailscale direct connection"
+    names={_norm_device_name(device.get("name")),_norm_device_name(device.get("dns"))}
+    names.discard("")
+    matches=[]
+    for item in candidates:
+        n=_norm_device_name(item.get("name"))
+        if n and n in names:
+            matches.append(item["ip"])
+    if len(matches)==1:
+        return matches[0],"matching LAN hostname"
+    return "",""
+
+
+def _find_tail_device_by_text(devices):
+    value=prompt("Tailscale device name or MagicDNS name")
+    if not value:
+        return None
+    needle=value.strip().rstrip(".").casefold()
+    short=needle.split(".",1)[0]
+    matches=[]
+    for d in devices:
+        vals={d["name"].casefold(),d["dns"].casefold(),d["dns"].split(".",1)[0].casefold() if d["dns"] else ""}
+        if needle in vals or short in vals:
+            matches.append(d)
+    if len(matches)==1:
+        return matches[0]
+    if not matches:
+        show_text("Device not found",f"No Tailscale device matched:\n\n{value}")
+        return None
+    c=menu("Choose Tailscale device",[f"{d['name']}  {d['dns']}  {d['tailscale_ips'][0]}" for d in matches])
+    return None if c is None else matches[c]
+
+
+def link_device(path):
+    devices=tailscale_devices()
+    choices=[]
+    if devices:
+        choices+=["Choose Tailscale device   recommended","Enter Tailscale / MagicDNS name"]
+    choices+=["Choose LAN client only","Enter IP manually","Back"]
+    c=menu("Add / link device",choices,"Link LAN + Tailscale identities to one Pi-hole profile without typing addresses when possible.")
+    if c is None or c==len(choices)-1:
+        return
+
+    device=None
+    offset=0
+    if devices:
+        if c==0:
+            labels=[]
+            for d in devices:
+                state="online" if d["online"] else "offline"
+                direct=f"  LAN {d['lan_candidates'][0]}" if d["lan_candidates"] else ""
+                labels.append(f"{d['name']:<26} {d['tailscale_ips'][0]:<15} {state}{direct}")
+            pick=menu("Choose Tailscale device",labels,"Tailscale name is enough; pihm will try to link its LAN address too.")
+            if pick is None:
+                return
+            device=devices[pick]
+        elif c==1:
+            device=_find_tail_device_by_text(devices)
+            if device is None:
+                return
+        offset=2
+
+    if device is not None:
+        candidates=recent_lan_clients()
+        auto_ip,reason=_auto_lan_for_tail_device(device,candidates)
+        tail_ip=device["tailscale_ips"][0]
+        friendly=device["name"]
+        if auto_ip:
+            action=menu("Link device",[
+                f"Link Tailscale + LAN   {tail_ip} + {auto_ip}   recommended",
+                "Choose a different LAN address",
+                f"Link Tailscale only   {tail_ip}",
+                "Cancel",
+            ],f"{friendly}: found {auto_ip} via {reason}.")
+            if action is None or action==3:
+                return
+            if action==0:
+                _save_linked_addresses(path,[
+                    (tail_ip,f"{friendly} - Tailscale"),
+                    (auto_ip,f"{friendly} - LAN"),
+                ])
+                _sync_after_link(path)
+                return
+            if action==2:
+                _save_linked_addresses(path,[(tail_ip,f"{friendly} - Tailscale")])
+                _sync_after_link(path)
+                return
+        lan_ip=_choose_lan_client(candidates,f"Choose LAN address for {friendly}")
+        entries=[(tail_ip,f"{friendly} - Tailscale")]
+        if lan_ip:
+            entries.append((lan_ip,f"{friendly} - LAN"))
+        _save_linked_addresses(path,entries)
+        _sync_after_link(path)
+        return
+
+    choice_index=c-offset
+    if choice_index==0:
+        lan_ip=_choose_lan_client(recent_lan_clients())
+        if lan_ip:
+            _save_linked_addresses(path,[(lan_ip,f"LAN device {lan_ip}")])
+            _sync_after_link(path)
+        return
+    if choice_index==1:
+        address=prompt("Client IP address")
+        if not address:
+            return
+        label=prompt("Optional label","") or ""
+        _save_linked_addresses(path,[(address,label)])
+        _sync_after_link(path)
+
+
 def edit_clients(path):
     pos=0
     while True:
-        vals=lines(path,"clients","entries"); items=vals+["+ Add client / proxy IP","Back"]
-        c=menu("Clients",items,"ADDRESS | optional label   Applied only when profile is applied",min(pos,len(items)-1))
-        if c is None or c==len(items)-1: return
+        vals=lines(path,"clients","entries")
+        items=vals+[
+            "+ Add / link device     discover Tailscale + LAN",
+            "+ Add address manually",
+            "Back",
+        ]
+        c=menu("Clients",items,"Recommended: Add / link device. pihm can discover Tailscale names and recent LAN addresses.",min(pos,len(items)-1))
+        if c is None or c==len(items)-1:
+            return
         pos=c
         if c==len(vals):
-            a=prompt("Client address (LAN, Tailscale 100.x, CIDR, or proxy Docker IP)")
-            if not a: continue
-            l=prompt("Optional label","") or ""; vals.append(f"{a} | {l}" if l else a); set_lines(path,"clients","entries",vals); continue
-        raw=vals[c]; a,sep,l=raw.partition("|"); a=a.strip(); l=l.strip() if sep else ""
+            link_device(path)
+            continue
+        if c==len(vals)+1:
+            address=prompt("Client address (LAN IP, Tailscale IP, or CIDR)")
+            if not address:
+                continue
+            label=prompt("Optional label","") or ""
+            _save_linked_addresses(path,[(address,label)])
+            continue
+        raw=vals[c]
+        address,sep,label=raw.partition("|")
+        address=address.strip()
+        label=label.strip() if sep else ""
         x=menu("Client",["Edit address","Edit label","Delete","Back"],raw)
         if x==0:
-            n=prompt("Client address",a); a=n or a
+            n=prompt("Client address",address)
+            address=n or address
         elif x==1:
-            n=prompt("Client label",l); l=l if n is None else n
-        elif x==2 and confirm(f"Remove {a} from this profile?"):
-            vals.pop(c); set_lines(path,"clients","entries",vals); pos=max(0,c-1); continue
-        else: continue
-        vals[c]=f"{a} | {l}" if l else a; set_lines(path,"clients","entries",vals)
-
+            n=prompt("Client label",label)
+            label=label if n is None else n
+        elif x==2 and confirm(f"Remove {address} from this profile?"):
+            vals.pop(c)
+            set_lines(path,"clients","entries",vals)
+            pos=max(0,c-1)
+            continue
+        else:
+            continue
+        vals[c]=f"{address} | {label}" if label else address
+        set_lines(path,"clients","entries",vals)
 
 def edit_lists(path):
     keys=list(CAT); pos=0
@@ -581,6 +926,7 @@ def help_screen():
     topics=[
         "Start here            what pihm actually manages",
         "Profiles              what a profile means",
+        "Link devices          LAN + Tailscale made easy",
         "Sync to Pi-hole       when to use it",
         "Gravity / blocklists  what Gravity actually is",
         "Arachnidium           what the proxy does",
@@ -635,6 +981,33 @@ A profile does NOT automatically mean proxy.
 A device can use the profile through normal Pi-hole DNS with no Arachnidium.
 """)
         elif c==2:
+            show_text("Help: Link devices","""Recommended path:
+
+  Profiles -> choose profile -> Clients -> Add / link device
+
+pihm reads your Tailscale device list and lets you choose a device by name.
+You can also type its Tailscale name or full MagicDNS name.
+
+Example:
+  dillons-s24-1
+  dillons-s24-1.time-puffin.ts.net
+
+pihm automatically adds the device's Tailscale 100.x address.
+
+If Tailscale currently has a direct LAN connection, pihm can often detect
+the same device's 192.168.x.x address automatically. Otherwise it shows
+recent Pi-hole LAN clients so you can select the address instead of typing it.
+
+Both identities are saved to ONE profile:
+
+  100.x.x.x      device - Tailscale
+  192.168.x.x    device - LAN
+
+That lets the same Pi-hole profile follow the device at home and over
+Tailscale. pihm never guesses silently: if the LAN match is uncertain,
+you choose from discovered clients.
+""")
+        elif c==3:
             show_text("Help: Sync to Pi-hole","""Editing a profile changes its saved INI file first.
 
 Sync to Pi-hole:
@@ -649,7 +1022,7 @@ Use Sync to Pi-hole after changing normal profile settings.
 
 Sync + refresh lists does the same sync, then also downloads fresh blocklists.
 """)
-        elif c==3:
+        elif c==4:
             show_text("Help: Gravity / blocklists","""Gravity is just Pi-hole's name for its blocklist download/build process.
 
 Simple version:
@@ -675,7 +1048,7 @@ Refresh blocklists = run Gravity again:
 You normally do not need to think about the word "Gravity".
 Think: "refresh my blocklists".
 """)
-        elif c==4:
+        elif c==5:
             show_text("Help: Arachnidium","""Arachnidium is OPTIONAL.
 
 It is an HTTP/HTTPS proxy that can reduce transferred data by rewriting/
@@ -697,7 +1070,7 @@ That means:
 
 It does NOT mean every Home Router client is now proxied.
 """)
-        elif c==5:
+        elif c==6:
             host,lan,tail=detected_proxy_addresses()
             show_text("Help: Connect to a proxy",f"""A proxy must be DEPLOYED and RUNNING before this works.
 
@@ -726,7 +1099,7 @@ Pi-hole DNS filtering can continue normally.
 Because Arachnidium intercepts HTTPS, the client also needs the mitmproxy CA.
 Open http://mitm.it through the running proxy to install it.
 """)
-        elif c==6:
+        elif c==7:
             show_text("Help: Daily updates","""Blocklist URLs change over time.
 
 Pi-hole keeps a LOCAL copy. It does not watch those URLs continuously.
@@ -744,7 +1117,7 @@ That runs Pi-hole's Gravity refresh once per day:
 This updates blocklists only.
 It does not update the Pi-hole Docker image or pihm itself.
 """)
-        elif c==7:
+        elif c==8:
             show_text("Help: Navigation","""Up/Down or j/k   Move
 Hold Up/Down       Repeat movement
 Enter              Select / toggle
@@ -756,7 +1129,7 @@ Profile edits save to the profile INI immediately.
 They do not change live Pi-hole until you choose Sync to Pi-hole
 or Sync + refresh lists.
 """)
-        elif c==8:
+        elif c==9:
             show_text("Help: Files",f"""Program:
   {MANAGER}
 
