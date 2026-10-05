@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import configparser
+import os
+import re
+import runpy
+import select
+import shutil
+import sys
+import termios
+import tty
+from pathlib import Path
+
+MANAGER_DEFAULT = Path(os.environ.get("PIHOLE_PROFILE_MANAGER", "/docker/pihole/pihole-profile-manager"))
+ARACHNIDIUM_DIR = Path(os.environ.get("ARACHNIDIUM_DIR", "/docker/arachnidium"))
+RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; CYAN="\033[36m"; GREEN="\033[32m"; RED="\033[31m"; REV="\033[7m"
+
+
+def manager_path() -> Path:
+    if MANAGER_DEFAULT.is_file(): return MANAGER_DEFAULT
+    p=Path(__file__).resolve().with_name("pihole-profile-manager")
+    if p.is_file(): return p
+    raise SystemExit(f"ERROR: pihole-profile-manager not found at {MANAGER_DEFAULT} or {p}")
+
+
+MANAGER=manager_path()
+M=runpy.run_path(str(MANAGER),run_name="pihole_profile_manager_lib")
+CAT=M["catalog"]()
+
+
+def clear(): print("\033[2J\033[H",end="",flush=True)
+def width(): return max(60,shutil.get_terminal_size((100,30)).columns)
+def clip(s,n): return s if len(s)<=n else s[:max(0,n-1)]+"…"
+
+
+def key():
+    fd=sys.stdin.fileno(); old=termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd); data=os.read(fd,1)
+        if data==b"\x1b":
+            while select.select([fd],[],[],0.035)[0] and len(data)<8: data+=os.read(fd,1)
+    finally: termios.tcsetattr(fd,termios.TCSADRAIN,old)
+    m={b"\x1b[A":"UP",b"\x1b[B":"DOWN",b"\x1b[5~":"PGUP",b"\x1b[6~":"PGDN",b"\x1b[H":"HOME",b"\x1b[F":"END",b"\r":"ENTER",b"\n":"ENTER",b"\x1b":"ESC"}
+    return m.get(data,data.decode(errors="ignore"))
+
+
+def heading(name,sub=""):
+    clear(); print(f"{BOLD}{CYAN}{name}{RESET}")
+    if sub: print(clip(sub,width()))
+    print("─"*min(width(),100))
+
+
+def menu(name,items,sub="",default=0,footer="Up/Down or j/k = move   Enter = select   q/Esc = back"):
+    if not items: items=["(empty)"]
+    i=max(0,min(default,len(items)-1)); off=0
+    while True:
+        rows=max(5,shutil.get_terminal_size((100,30)).lines-8)
+        if i<off: off=i
+        if i>=off+rows: off=i-rows+1
+        heading(name,sub)
+        for n in range(off,min(len(items),off+rows)):
+            line=f" {'>' if n==i else ' '} {n+1:>2}. {items[n]}"
+            print((REV if n==i else "")+clip(line,width())+(RESET if n==i else ""))
+        if len(items)>rows: print(DIM+f"\nShowing {off+1}-{min(len(items),off+rows)} of {len(items)}"+RESET)
+        print("\n"+DIM+footer+RESET)
+        k=key(); lo=k.lower() if len(k)==1 else k
+        if k=="UP" or lo=="k": i=(i-1)%len(items)
+        elif k=="DOWN" or lo=="j": i=(i+1)%len(items)
+        elif k=="PGUP": i=max(0,i-rows)
+        elif k=="PGDN": i=min(len(items)-1,i+rows)
+        elif k=="HOME": i=0
+        elif k=="END": i=len(items)-1
+        elif k=="ENTER": return i
+        elif k=="ESC" or lo in {"q","b"}: return None
+        elif lo.isdigit() and lo!="0" and int(lo)<=len(items): return int(lo)-1
+
+
+def pause(msg="Press any key to continue..."):
+    print("\n"+DIM+msg+RESET,end="",flush=True); key(); print()
+
+
+def prompt(label,default=""):
+    clear(); print(f"{BOLD}{label}{RESET}")
+    if default: print(DIM+f"Current: {default}"+RESET)
+    print(DIM+"Blank keeps current. Type /cancel to cancel."+RESET)
+    try: v=input("> ").strip()
+    except (EOFError,KeyboardInterrupt): return None
+    if v=="/cancel": return None
+    return default if not v else v
+
+
+def confirm(text):
+    clear()
+    try: return input(f"{text} [y/N]: ").strip().lower() in {"y","yes"}
+    except (EOFError,KeyboardInterrupt): return False
+
+
+def external(label,fn):
+    clear(); print(f"{BOLD}{label}{RESET}\n")
+    try: fn(); print(f"\n{GREEN}Done.{RESET}")
+    except BaseException as e: print(f"\n{RED}ERROR:{RESET} {e}")
+    pause()
+
+
+def cfg(path): return M["cfg"](path)
+def dump(c,path): path.write_text(M["_dump"](c),encoding="utf-8")
+
+
+def lines(path,section,opt):
+    c=cfg(path); return M["lines"](c.get(section,opt,fallback=""))
+
+
+def set_lines(path,section,opt,values):
+    c=cfg(path)
+    if not c.has_section(section): c.add_section(section)
+    c.set(section,opt,"\n"+"\n".join(values)); dump(c,path)
+
+
+def set_value(path,section,opt,value):
+    c=cfg(path)
+    if not c.has_section(section): c.add_section(section)
+    c.set(section,opt,value); dump(c,path)
+
+
+def show_text(name,text,sub=""):
+    data=text.splitlines() or [""]; off=0
+    while True:
+        rows=max(5,shutil.get_terminal_size((100,30)).lines-7); heading(name,sub)
+        for line in data[off:off+rows]: print(clip(line,width()))
+        print("\n"+DIM+"Up/Down/PgUp/PgDn = scroll   q/Esc = back"+RESET)
+        k=key(); lo=k.lower() if len(k)==1 else k
+        if k=="UP" or lo=="k": off=max(0,off-1)
+        elif k=="DOWN" or lo=="j": off=min(max(0,len(data)-rows),off+1)
+        elif k=="PGUP": off=max(0,off-rows)
+        elif k=="PGDN": off=min(max(0,len(data)-rows),off+rows)
+        elif k=="ESC" or lo in {"q","b"}: return
+
+
+def edit_values(path,section,opt,name):
+    pos=0
+    while True:
+        vals=lines(path,section,opt); items=vals+["+ Add item","Back"]
+        c=menu(name,items,str(path.name),min(pos,len(items)-1))
+        if c is None or c==len(items)-1: return
+        pos=c
+        if c==len(vals):
+            v=prompt(f"Add to {name}")
+            if v and v not in vals: vals.append(v); set_lines(path,section,opt,vals)
+            continue
+        action=menu(name,["Edit","Delete","Back"],vals[c])
+        if action==0:
+            v=prompt(f"Edit {name}",vals[c])
+            if v is not None: vals[c]=v; set_lines(path,section,opt,vals)
+        elif action==1 and confirm(f"Delete {vals[c]}?"):
+            vals.pop(c); set_lines(path,section,opt,vals); pos=max(0,c-1)
+
+
+def edit_clients(path):
+    pos=0
+    while True:
+        vals=lines(path,"clients","entries"); items=vals+["+ Add client / proxy IP","Back"]
+        c=menu("Clients",items,"ADDRESS | optional label   Applied only when profile is applied",min(pos,len(items)-1))
+        if c is None or c==len(items)-1: return
+        pos=c
+        if c==len(vals):
+            a=prompt("Client address (LAN, Tailscale 100.x, CIDR, or proxy Docker IP)")
+            if not a: continue
+            l=prompt("Optional label","") or ""; vals.append(f"{a} | {l}" if l else a); set_lines(path,"clients","entries",vals); continue
+        raw=vals[c]; a,sep,l=raw.partition("|"); a=a.strip(); l=l.strip() if sep else ""
+        x=menu("Client",["Edit address","Edit label","Delete","Back"],raw)
+        if x==0:
+            n=prompt("Client address",a); a=n or a
+        elif x==1:
+            n=prompt("Client label",l); l=l if n is None else n
+        elif x==2 and confirm(f"Remove {a} from this profile?"):
+            vals.pop(c); set_lines(path,"clients","entries",vals); pos=max(0,c-1); continue
+        else: continue
+        vals[c]=f"{a} | {l}" if l else a; set_lines(path,"clients","entries",vals)
+
+
+def edit_lists(path):
+    keys=list(CAT); pos=0
+    while True:
+        selected=set(lines(path,"lists","keys")); items=[]
+        for k in keys: items.append(f"{'[x]' if k in selected else '[ ]'} {k:<16} {CAT[k][1]}")
+        c=menu("Blocklists",items,"Enter toggles. Saved immediately to profile; Apply writes to Pi-hole.",pos,"Up/Down = move   Enter = toggle   q/Esc = back")
+        if c is None: return
+        pos=c; k=keys[c]
+        if k in selected: selected.remove(k)
+        else: selected.add(k)
+        set_lines(path,"lists","keys",[k for k in keys if k in selected])
+
+
+def apply(path,gravity=False):
+    def work():
+        p=M["load"](path,CAT); M["apply_one"](p,CAT); M["reload"](gravity)
+    external("Apply profile"+(" + Gravity" if gravity else ""),work)
+
+
+def clone(path):
+    p=M["load"](path,CAT); name=prompt("Clone profile as",p["name"]+" Copy")
+    if not name: return None
+    out=M["PROFILES"]/f"{M['slug'](name)}.ini"
+    if out.exists(): show_text("Already exists",str(out)); return None
+    shutil.copy2(path,out); c=cfg(out); c.set("profile","name",name); c.set("profile","description",f"Cloned from {p['name']}"); dump(c,out); return out
+
+
+def profile_editor(path):
+    while True:
+        p=M["load"](path,CAT)
+        items=[f"Description          {p['description']}",f"Blocklists           {len(p['keys'])}",f"Allow domains        {len(p['allow'])}",f"Deny domains         {len(p['deny'])}",f"Blocked TLDs         {len(p['tlds'])}",f"Clients / proxy IPs  {len(p['clients'])}","Apply profile        reload DNS","Apply + Gravity      rebuild lists","Clone profile","View raw INI","Back"]
+        c=menu(f"Profile: {p['name']}",items,"Profile-file edits save immediately. Pi-hole changes only on Apply.")
+        if c is None or c==10: return
+        if c==0:
+            v=prompt("Description",p["description"])
+            if v is not None: set_value(path,"profile","description",v)
+        elif c==1: edit_lists(path)
+        elif c==2: edit_values(path,"allow","domains","Allowed domains")
+        elif c==3: edit_values(path,"deny","domains","Denied domains")
+        elif c==4: edit_values(path,"deny","tlds","Blocked TLDs")
+        elif c==5: edit_clients(path)
+        elif c==6: apply(path,False)
+        elif c==7: apply(path,True)
+        elif c==8:
+            out=clone(path)
+            if out: path=out
+        elif c==9: show_text("Raw profile",path.read_text(encoding="utf-8"),str(path))
+
+
+def new_profile():
+    name=prompt("New profile name")
+    if not name: return None
+    out=M["PROFILES"]/f"{M['slug'](name)}.ini"
+    if out.exists(): show_text("Already exists",str(out)); return None
+    c=menu("Preset",["Blank","Normal - balanced","Strict - PRO++","Parental - Normal + category filters"],default=1)
+    if c is None: return None
+    preset=[None,"normal","strict","parental"][c]; keys=M["PRESETS"].get(preset,[]) if preset else []; deny=M["SONOS"] if preset else []
+    M["write_profile"](out,name,keys,deny=deny); return out
+
+
+def capture_groups():
+    def work():
+        db=M["con"](); names=[r[0] for r in db.execute('SELECT name FROM "group" WHERE id<>0 ORDER BY id')]; db.close()
+        for n in names:
+            out=M["PROFILES"]/f"{M['slug'](n)}.ini"
+            if out.exists(): print("Skip existing:",n); continue
+            M["capture"](n,CAT,False)
+    external("Capture current Pi-hole groups",work)
+
+
+def profiles_menu():
+    pos=0
+    while True:
+        ps=[]
+        for p in M["pfiles"]():
+            try: ps.append(M["load"](p,CAT))
+            except BaseException: ps.append({"path":p,"name":p.stem})
+        items=[p["name"] for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
+        c=menu("Profiles",items,"Create, edit, clone, assign clients, and apply profiles.",min(pos,len(items)-1))
+        if c is None or c==len(items)-1: return
+        pos=c
+        if c<len(ps): profile_editor(ps[c]["path"])
+        elif c==len(ps):
+            out=new_profile()
+            if out: profile_editor(out)
+        else: capture_groups()
+
+
+def maintenance():
+    while True:
+        c=menu("Maintenance",["Show group status","Run Gravity now","Install daily Gravity timer","Show timer status","Remove timer","Capture current groups","Back"])
+        if c is None or c==6: return
+        if c==0: external("Group status",M["status"])
+        elif c==1: external("Gravity update",lambda:M["reload"](True))
+        elif c==2: external("Install timer",lambda:M["timer"]("install","*-*-* 03:15:00"))
+        elif c==3: external("Timer status",lambda:M["timer"]("status","*-*-* 03:15:00"))
+        elif c==4 and confirm("Remove the daily Gravity timer?"): external("Remove timer",lambda:M["timer"]("remove","*-*-* 03:15:00"))
+        elif c==5: capture_groups()
+
+
+def envfile(path):
+    out={}
+    if path.is_file():
+        for x in path.read_text().splitlines():
+            x=x.strip()
+            if x and not x.startswith("#") and "=" in x:
+                k,v=x.split("=",1); out[k.strip()]=v.strip().strip('"\'')
+    return out
+
+
+def proxy_screen():
+    e=envfile(ARACHNIDIUM_DIR/".env"); host=e.get("PROXY_HOSTNAME","omv.example-tailnet.ts.net"); lan=e.get("LAN_IP","192.168.1.10"); tail=e.get("TAILSCALE_IP","100.64.0.10")
+    text=f"""How profile-aware Arachnidium proxies work
+
+Each Arachnidium instance has a fixed private Docker IP (172.30.53.x).
+Assign that Docker IP to a Pi-hole profile. The proxy's own DNS then uses that profile.
+Each instance publishes one host TCP port, for example 18101.
+
+For a profile published on port 18101:
+
+  Same hostname home/away:  {host}:18101
+  LAN address:              {lan}:18101
+  Tailscale address:        {tail}:18101
+
+The single-hostname setup works when Pi-hole resolves the OMV MagicDNS hostname to the LAN IP at home.
+Away from home, Tailscale MagicDNS resolves that same hostname to the OMV Tailscale IP.
+The browser proxy setting therefore stays identical.
+
+Browser setup
+
+  HTTP proxy:  {host}
+  HTTPS proxy: {host}
+  Port:        18101
+
+Open http://mitm.it through the proxy and install the mitmproxy CA for that client.
+Do not expose the proxy on a public/WAN interface.
+
+See /docker/arachnidium/README.md for adding another proxy/profile port.
+"""
+    show_text("Proxy endpoints",text)
+
+
+def help_screen():
+    show_text("Help",f"""Navigation
+
+  Up/Down or j/k    Move
+  Enter             Select / toggle
+  q or Esc          Back
+  PgUp/PgDn         Scroll
+
+Recommended workflow
+
+  1. Profiles -> Import current Pi-hole groups (once on an existing install).
+  2. Open a profile and toggle lists / edit allow, deny, TLD, and client entries.
+  3. Apply profile. Use Apply + Gravity when blocklist selections changed.
+  4. Add 172.30.53.x as a client when that profile has an Arachnidium proxy instance.
+
+Files
+
+  Manager:  {MANAGER}
+  Profiles: {M['PROFILES']}
+  Catalog:  {M['CATALOG']}
+  DB:       {M['DB']}
+
+CLI automation remains available with:
+  {MANAGER} --help
+""")
+
+
+def main():
+    if not sys.stdin.isatty() or not sys.stdout.isatty(): print("ERROR: interactive terminal required",file=sys.stderr); return 2
+    M["PROFILES"].mkdir(parents=True,exist_ok=True)
+    while True:
+        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / apply","Proxy endpoints     LAN + Tailscale connection info","Maintenance         Gravity / timer / import","Help","Quit"],"Arrow-key TUI inspired by smtty/Awtarchy navigation")
+        if c is None or c==4: clear(); return 0
+        if c==0: profiles_menu()
+        elif c==1: proxy_screen()
+        elif c==2: maintenance()
+        elif c==3: help_screen()
+
+
+if __name__=="__main__": raise SystemExit(main())
