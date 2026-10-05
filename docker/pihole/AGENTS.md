@@ -1,50 +1,145 @@
 # Pi-hole agent instructions
 
-Read `README.md` and `NETWORKING.md` before changing anything in this directory.
+Read `README.md`, `SETUP.md`, and `NETWORKING.md` before changing anything in this directory.
 
-## Safety and discovery
+## Core rule
 
-- Re-confirm the current host, container names, Compose project/service names, active Compose files, network names, and paths from live evidence before modifying a server.
-- The repository default and recommended upstream is Quad9 DoH through `dnsproxy`.
-- NextDNS is optional only. Never assume a live host follows the repository default; inspect the running `dnsproxy` command before changing it.
-- Do not configure Quad9/NextDNS in parallel as alternate client resolvers around Pi-hole. Pi-hole must remain the policy/filtering layer in front of the chosen upstream.
-- Do not disable IPv6 as a shortcut. Native IPv6 is intentional and useful for direct Tailscale connectivity.
-- Do not expose raw DNS publicly.
-- Do not publish user-specific public IPv6 prefixes, tailnet names, passwords, API keys, or other deployment secrets into this repository.
-- Back up live Compose/config files before modifying them and validate the merged Compose configuration before recreation.
+Inspect the live deployment before acting.
 
-## Identity matters
+A running Pi-hole stack may differ from repository examples. Re-confirm the current host, container names, Compose project/service names, active Compose files, networks, paths, and running `dnsproxy` command before making changes.
 
-Pi-hole profiles depend on the DNS source address.
+Use the live stack as implementation truth. Use repository examples as templates, not as proof of current state.
 
-Preferred stable client identities are:
+## Keep it simple
 
-- LAN IPv4
-- Tailscale IPv4
+User-facing instructions should be short, direct, and ordered around what the user actually needs to do.
 
-Do not silently guess that a rotating IPv6 privacy address belongs to a particular profile.
+Follow the same documentation discipline used in Awtarchy:
 
-For one physical device, it is normal for one profile to contain both stable identities, for example a LAN IPv4 address plus the device's Tailscale 100.x address. `pihm` should discover/link these instead of making the user manually understand both address spaces.
+- start with a one-sentence purpose;
+- use a small number of clear sections;
+- describe user-visible behavior before implementation detail;
+- keep normal procedures in `SETUP.md`;
+- keep deep troubleshooting and networking detail in `NETWORKING.md`;
+- keep durable agent rules here;
+- do not dump debugging chronology into user-facing docs;
+- do not repeat the same procedure across multiple files unless the extra context is necessary.
 
-Stock ASUSWRT may advertise the router itself as IPv6 RDNSS even when a custom Pi-hole IPv6 upstream is configured. DNS filtering can still work while per-device IPv6 identity collapses to the router. A direct Pi-hole IPv6 macvlan endpoint does not, by itself, fix this stock-ASUS RDNSS behavior. See `NETWORKING.md`.
+Prefer one safe command block over several fragmented commands when a server change is required.
 
-Do not attribute every query logged as the router to a specific downstream device. The router generates its own DNS queries too. Use a unique test hostname and/or packet evidence before assigning causality.
+## Recommended DNS design
+
+Default and recommended:
+
+```text
+client -> Pi-hole profile/group -> dnsproxy -> Quad9 DoH
+```
+
+Pi-hole is the self-hosted filtering and per-client policy layer. `dnsproxy` is encrypted upstream transport. Quad9 is the default recursive resolver.
+
+NextDNS remains optional through `compose.nextdns-upstream.yml`.
+
+Never configure Quad9 and NextDNS as parallel client-side resolvers around Pi-hole. That creates a policy bypass path.
+
+Never assume the live host follows the repository default. Inspect the running `dnsproxy` command first.
+
+## pihm invariants
+
+Pi-hole group id 0 is the built-in `Default` group. Do not treat it as an ordinary captured profile.
+
+One normal `pihm` profile may be the persistent fallback. When that profile is synced:
+
+- its blocklist assignments mirror into Pi-hole `Default`;
+- its allow/deny/TLD rules mirror into Pi-hole `Default`;
+- client assignments do not mirror.
+
+Cloning a profile must not clone its fallback status.
+
+A balanced profile such as `Home Router` is the recommended fallback for otherwise-unassigned home clients. Explicitly assigned devices may use stricter profiles.
+
+## Client identity
+
+Pi-hole profile selection depends on the DNS source address.
+
+Preferred stable identities:
+
+- LAN IPv4;
+- Tailscale IPv4.
+
+One physical device may legitimately have both identities in the same profile. `pihm` should discover/link them instead of making the user manually understand both address spaces.
+
+Do not silently guess device identity from a rotating Android IPv6 privacy address.
+
+Do not assume every query logged from the router came from a downstream client. Routers generate their own DNS traffic.
+
+## Tailscale
+
+For the validated design:
+
+- tailnet global DNS points to the OMV Tailscale IPv4 address;
+- MagicDNS remains enabled;
+- Tailscale DNS override remains enabled for clients that should use Pi-hole while connected;
+- direct NextDNS global DNS is removed rather than left in parallel.
+
+Before relying on per-device policies, verify Pi-hole logs show the real Tailscale `100.x` client address.
+
+`tailscale netcheck` shows NAT/UDP/IPv4/IPv6 capability. It does not prove every peer is direct. Use `tailscale ping <peer>` to distinguish direct connectivity from DERP for a specific peer.
+
+## IPv6 and validated router pattern
+
+Do not disable IPv6 as a shortcut.
+
+The validated AT&T BGW320-500 + stock ASUSWRT setup is:
+
+- BGW320 IPv4 IP Passthrough left intact;
+- BGW320 IPv6 enabled;
+- BGW320 DHCPv6 enabled;
+- BGW320 DHCPv6 Prefix Delegation enabled;
+- ASUS IPv6 mode `Native`;
+- ASUS DHCP-PD enabled;
+- ASUS LAN autoconfiguration `Stateless`;
+- ASUS Router Advertisement enabled;
+- ASUS IPv6 firewall enabled.
+
+This preserved native IPv6 and Tailscale IPv6 capability.
+
+Stock ASUSWRT may still advertise its own LAN IPv6 address as RDNSS even when Pi-hole is configured as the IPv6 DNS target. DNS filtering can still work while Pi-hole sees the ASUS/router instead of the original client.
+
+Treat that as a client-identity limitation, not a filtering failure.
 
 ## Docker networking
 
 The normal Pi-hole bridge is IPv4-only.
 
-Use the optional IPv6-only macvlan overlay for direct LAN IPv6 reachability. The macvlan gives Pi-hole a real LAN IPv6 address, but stock ASUSWRT may still advertise the ASUS itself as RDNSS and proxy IPv6 DNS to Pi-hole.
+Use `compose.ipv6-dns.yml` for direct LAN IPv6 reachability. It attaches Pi-hole to an IPv6-only macvlan on the physical LAN.
 
-Future Compose recreations must include every active overlay. Before recreating the stack, inspect `com.docker.compose.project.config_files` on the running container and preserve the active overlay set. Typical overlays are Tailscale DNS and IPv6 DNS; NextDNS is optional.
+The macvlan solves Pi-hole IPv6 reachability. It does not force stock ASUSWRT to advertise Pi-hole itself as RDNSS.
 
-Residential DHCPv6-PD prefixes can change. Keep the public overlay variable-driven rather than hard-coding one deployment's global prefix. When the delegated prefix changes, update the macvlan subnet/gateway/Pi-hole IPv6 and the router's custom IPv6 DNS target together.
+Before any Compose recreation, inspect:
 
-The public repository contains examples/generic overlays. A live `/docker/pihole/compose.yml` may contain deployment-specific hosts, mounts, certificates, addresses, or secrets. Never overwrite it from an example without first comparing the live stack.
+```bash
+docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
+```
 
-## Evidence discipline and validation
+Preserve every active overlay.
 
-Useful checks include:
+Residential DHCPv6-PD prefixes can change. If the delegated prefix changes, update the macvlan subnet, gateway, Pi-hole IPv6 address, and router DNS target together.
+
+Never overwrite a live `/docker/pihole/compose.yml` from the public example without comparing deployment-specific hosts, mounts, certificates, addresses, and secrets first.
+
+## Troubleshooting lessons
+
+Do not over-interpret a single log or capture.
+
+- DNS silence while browsing is not proof of failure. DNS answers and HTTP/2/HTTP/3 connections may be cached.
+- A unique intentionally nonexistent hostname is useful for forcing and correlating a fresh DNS lookup.
+- Firefox DoH is independent of Android Private DNS. Browser DoH can bypass Pi-hole even when system DNS is correct.
+- Android Wi-Fi proxy should remain `None` unless Arachnidium is intentionally being used. `Auto-config` is not a DNS fix.
+- A packet capture on OMV cannot see a phone-to-router DNS packet if that packet terminates at the router.
+- `rdisc6` shows the actual IPv6 RDNSS advertisement. Use its source/link-layer evidence instead of inferring the advertiser from the IPv6 prefix alone.
+- After recreating Pi-hole, wait for FTL readiness and confirm port-53 listeners before treating an immediate connection failure as a networking-design problem.
+
+Useful checks:
 
 ```bash
 docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
@@ -56,75 +151,22 @@ rdisc6 enp3s0
 tailscale netcheck
 ```
 
-Build the `docker compose ... config` validation command from the overlays that are actually active on the live host; do not blindly assume a fixed file list.
-
-Important interpretation rules:
-
-- DNS silence while browsing is not proof of failure. DNS answers and HTTP/2/HTTP/3 connections may be cached. Use a unique intentionally nonexistent hostname to force a fresh lookup.
-- A browser can bypass system DNS through DoH even when Android/system DNS is correct. Firefox DoH must be checked separately.
-- Android Wi-Fi proxy should remain `None` unless Arachnidium is intentionally being used. `Auto-config` is not a DNS fix.
-- A host-side capture on OMV cannot see a phone-to-router DNS packet that terminates at the router. Do not use that capture alone to rule out router DNS proxying.
-- `rdisc6` shows what RDNSS the router is advertising. Do not infer the advertiser from the IPv6 prefix alone; use the RA source/link-layer evidence.
-- After a Compose recreation, wait for Pi-hole/FTL readiness and confirm `[::]:53`/port 53 listeners before diagnosing an immediate connection-refused result as a network-design failure.
-- `tailscale netcheck` shows NAT/UDP/IPv4/IPv6 capability, not whether every peer connection is direct. Use `tailscale ping <peer>` to distinguish direct vs DERP for a specific peer.
+Build `docker compose ... config` from the overlays that are actually active on the live host. Do not assume a fixed file list.
 
 If a change affects client identity, validate both the LAN path and the Tailscale path before calling it complete.
 
-## pihm invariants
+## Arachnidium
 
-- Pi-hole group id 0 is the built-in `Default` group. Do not manage it as a normal captured profile.
-- One normal `pihm` profile may be marked as the persistent default fallback. Its blocklist and allow/deny/TLD assignments mirror into Pi-hole `Default`; client assignments do not.
-- Keep the fallback marker persistent in the profile INI. Cloning a profile must not clone default status.
-- If sync/apply behavior changes, preserve the invariant that syncing the selected fallback profile also refreshes the built-in `Default` policy.
-- The recommended fallback for a general home deployment is a balanced home policy such as `Home Router`, while specifically assigned clients may use stricter profiles.
-- Arachnidium remains optional and opt-in. Reserving an endpoint is metadata only; it does not deploy/start a proxy or force a profile through one.
+Arachnidium is optional and opt-in.
 
-## Validated router pattern
+A reserved endpoint is metadata only. It does not deploy/start Arachnidium and does not force a Pi-hole profile through a proxy.
 
-For the validated AT&T BGW320-500 + stock ASUSWRT arrangement:
+Do not mix Arachnidium troubleshooting into normal Pi-hole DNS troubleshooting unless a client is intentionally configured to use the proxy.
 
-- BGW320: IPv6 on, DHCPv6 on, DHCPv6 Prefix Delegation on, IPv4 IP Passthrough left intact.
-- ASUS: IPv6 `Native`, DHCP-PD enabled, Stateless LAN autoconfiguration, Router Advertisement enabled, IPv6 firewall enabled.
-- ASUS IPv4 DHCP should advertise Pi-hole directly and should not additionally advertise the router as IPv4 DNS.
-- Stock ASUSWRT may still advertise its own LAN IPv6 address as RDNSS even when the configured upstream IPv6 DNS is Pi-hole. Treat this as a client-identity limitation, not a filtering failure.
-- Keep IPv6 enabled. Native IPv6 was validated with working external IPv6 reachability and Tailscale IPv6 capability.
+## Security
 
-## Lessons from validated deployment
-
-- One physical device may need two stable client identities in the same profile: its LAN IPv4 address and its Tailscale 100.x address. Prefer automatic discovery/linking over manual address entry.
-- Do not use rotating Android IPv6 privacy addresses as profile identities.
-- The direct Pi-hole IPv6 macvlan endpoint solves IPv6 reachability, but it does not force stock ASUSWRT to advertise Pi-hole itself as RDNSS. Stock ASUSWRT may still advertise the router and proxy IPv6 DNS to Pi-hole, which preserves filtering but can hide the original client identity.
-- Do not assume every query logged from the router came from a downstream client. Routers generate their own DNS traffic too. Correlate with a unique test hostname or stronger packet evidence.
-- DNS silence while browsing is not proof of failure. DNS answers and HTTP/2/HTTP/3 connections can remain cached.
-- Firefox DoH must be checked separately from Android Private DNS. Browser-level DoH can bypass Pi-hole even when system DNS is correct.
-- Android Wi-Fi proxy should remain None unless Arachnidium is intentionally being used. Auto-config is not a DNS fix.
-- A packet capture on OMV cannot observe a phone-to-router DNS packet if that packet terminates at the router.
-- Use rdisc6 to inspect the actual IPv6 RDNSS advertisement. Do not infer the advertiser only from the delegated prefix.
-- After recreating Pi-hole, confirm FTL is ready and listening on port 53 before treating an immediate connection failure as a network-design failure.
-- tailscale netcheck proves NAT/UDP/IPv4/IPv6 capability, not that every peer path is direct. Use tailscale ping against a specific peer to distinguish direct from DERP.
-
-## pihm invariants
-
-- Pi-hole group id 0 is the built-in Default group. Do not treat it as an ordinary captured profile.
-- One normal pihm profile may be the persistent Default fallback.
-- The fallback mirrors blocklist and allow/deny/TLD assignments into Pi-hole Default. It does not copy client assignments.
-- Cloning a profile must not clone its Default-fallback status.
-- Syncing the selected fallback profile must keep Pi-hole Default mirrored to it.
-- A balanced profile such as Home Router is the recommended fallback for otherwise-unassigned home clients; explicitly assigned clients may use stricter profiles.
-- Arachnidium remains optional and opt-in. Reserving an endpoint is metadata only and must not be described as deploying or forcing a proxy.
-
-## Validated router pattern
-
-For the validated AT&T BGW320-500 plus stock ASUSWRT arrangement:
-
-- BGW320 keeps IPv6, DHCPv6, and DHCPv6 Prefix Delegation enabled, with IPv4 IP Passthrough left intact.
-- ASUS uses Native IPv6 with DHCP-PD enabled, Stateless LAN autoconfiguration, Router Advertisement enabled, and the IPv6 firewall enabled.
-- ASUS IPv4 DHCP advertises Pi-hole directly and does not additionally advertise the router as IPv4 DNS.
-- Stock ASUSWRT may still advertise its own LAN IPv6 address as RDNSS even when Pi-hole is configured as the IPv6 DNS target. Treat this as a client-identity limitation, not a filtering failure.
-- Keep IPv6 enabled. Native IPv6 and Tailscale IPv6 capability were both validated successfully.
-
-## Live-stack preservation
-
-- Before any Compose recreation, inspect the running container's com.docker.compose.project.config_files label and preserve every active overlay.
-- The public repository contains generic examples. A live /docker/pihole/compose.yml may include deployment-specific addresses, hosts, mounts, certificates, or secrets. Never overwrite it from an example without comparing the live stack first.
-- Residential DHCPv6-PD prefixes can change. Update the IPv6 macvlan subnet, gateway, Pi-hole address, and router DNS target together when that happens.
+- Never expose raw Pi-hole DNS publicly without an explicit access-control design.
+- Keep the router IPv6 firewall enabled.
+- Do not commit or repeat deployment secrets, passwords, API keys, tailnet names, or residential public IPv6 prefixes.
+- The Pi-hole web/API password is sensitive. Rotate it if it has been pasted into a chat, ticket, or public location.
+- Back up live Compose/config/database state before modifying it.
