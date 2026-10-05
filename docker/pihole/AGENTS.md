@@ -171,3 +171,17 @@ Do not mix Arachnidium troubleshooting into normal Pi-hole DNS troubleshooting u
 - Do not commit or repeat deployment secrets, passwords, API keys, tailnet names, or residential public IPv6 prefixes.
 - The Pi-hole web/API password is sensitive. Rotate it if it has been pasted into a chat, ticket, or public location.
 - Back up live Compose/config/database state before modifying it.
+
+## pihm-web
+
+pihm-web is optional and must remain separate from the pihm TUI. Do not make the TUI depend on the web service.
+
+Keep the web interface focused on frequent profile/client tasks rather than cloning the entire Pi-hole administration UI.
+
+Web mutations should reuse pihm/pihole-profile-manager operations so database backups, profile ownership, Default fallback behavior, and Pi-hole reload behavior stay centralized.
+
+The web backend is localhost-only by default. Do not expose it publicly or enable Tailscale Funnel. Any Tailscale Serve integration must be opt-in and must inspect existing Serve configuration before changing it.
+
+Do not put the Docker socket inside a pihm-web container. The initial implementation runs on the OMV host and reuses the existing manager.
+
+For LAN client assignments, display a discovered MAC address when available, but keep the stable LAN IPv4 address as the Pi-hole client identity. Recommend a router DHCP reservation for that IPv4/MAC pair before treating the assignment as permanent.
