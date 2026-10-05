@@ -5,7 +5,9 @@ Read `README.md` and `NETWORKING.md` before changing anything in this directory.
 ## Safety and discovery
 
 - Re-confirm the current host, container names, Compose project/service names, active Compose files, network names, and paths from live evidence before modifying a server.
-- Do not assume the live upstream is Quad9. During migration, `dnsproxy` may still intentionally point at NextDNS.
+- The repository default and recommended upstream is Quad9 DoH through `dnsproxy`.
+- NextDNS is optional only. Never assume a live host follows the repository default; inspect the running `dnsproxy` command before changing it.
+- Do not configure Quad9/NextDNS in parallel as alternate client resolvers around Pi-hole. Pi-hole must remain the policy/filtering layer in front of the chosen upstream.
 - Do not disable IPv6 as a shortcut. Native IPv6 is intentional and useful for direct Tailscale connectivity.
 - Do not expose raw DNS publicly.
 - Do not publish user-specific public IPv6 prefixes, tailnet names, passwords, API keys, or other deployment secrets into this repository.
