@@ -10,37 +10,50 @@ The profile manager below keeps groups, lists, allow/deny rules, blocked TLDs, a
 
 ## Profile manager
 
+The short command is `pihm` ("Pi-hole Manager").
+
 Files:
 
+- `pihm-installer` - install/update/uninstall helper
 - `pihole-profile-manager` - management program and CLI
 - `pihole-profile-tui` - arrow-key TUI for normal day-to-day management
 - `profile-catalog.ini` - maintained blocklist URLs
 - `profile.example.ini` - editable profile example
 - `/docker/pihole/profiles.d/*.ini` - live profile definitions
 
-Install/update the manager into the live Pi-hole directory:
+### Install
+
+Run as root on the OMV host:
 
 ```bash
-cd /path/to/omv-remote-dots/docker/pihole
-install -m 0755 pihole-profile-manager /docker/pihole/pihole-profile-manager
-install -m 0755 pihole-profile-tui /docker/pihole/pihole-profile-tui
-install -m 0644 profile-catalog.ini /docker/pihole/profile-catalog.ini
-mkdir -p /docker/pihole/profiles.d
+curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/pihole/pihm-installer | bash
 ```
+
+The installer keeps the manager under `/docker/pihole`, creates `/usr/local/bin/pihm`, preserves existing profile files, backs up replaced manager files, and validates the Python programs before installing them.
+
+Update later:
+
+```bash
+pihm-installer update
+```
+
+Uninstall only the manager program files and command links:
+
+```bash
+pihm-installer uninstall
+```
+
+Pi-hole databases, profile definitions, backups, and Compose files are preserved on uninstall.
 
 ### TUI
 
-Run the manager with no arguments:
+Launch it from anywhere:
 
 ```bash
-/docker/pihole/pihole-profile-manager
+pihm
 ```
 
-It opens the TUI automatically. You can also launch it directly:
-
-```bash
-/docker/pihole/pihole-profile-tui
-```
+Running `/docker/pihole/pihole-profile-manager` with no arguments opens the same TUI.
 
 Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, Enter selects or toggles, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
 
