@@ -70,11 +70,13 @@ Before changing Serve configuration, inspect what is already active:
 tailscale serve status
 ```
 
-The current Tailscale CLI can reverse-proxy a localhost service with:
+For branch testing, use a dedicated tailnet HTTPS port so an existing root Serve route is not replaced:
 
 ```bash
-tailscale serve --bg 8091
+tailscale serve --bg --https=8444 8091
 ```
+
+Then use the HTTPS URL reported by `tailscale serve status`.
 
 Do not use Tailscale Funnel for pihm-web.
 
@@ -104,3 +106,5 @@ Do not bind it publicly.
 Do not expose it with Tailscale Funnel.
 
 The testing branch does not automatically modify nginx, firewall rules, Tailscale Serve, or router configuration.
+
+The backend also refuses a non-loopback bind unless `PIHM_WEB_ALLOW_REMOTE_BIND=1` is explicitly set. Prefer leaving it on localhost and putting an authenticated/encrypted reverse proxy such as Tailscale Serve in front of it.
