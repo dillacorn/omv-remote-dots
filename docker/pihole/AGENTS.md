@@ -88,3 +88,43 @@ For the validated AT&T BGW320-500 + stock ASUSWRT arrangement:
 - ASUS IPv4 DHCP should advertise Pi-hole directly and should not additionally advertise the router as IPv4 DNS.
 - Stock ASUSWRT may still advertise its own LAN IPv6 address as RDNSS even when the configured upstream IPv6 DNS is Pi-hole. Treat this as a client-identity limitation, not a filtering failure.
 - Keep IPv6 enabled. Native IPv6 was validated with working external IPv6 reachability and Tailscale IPv6 capability.
+
+## Lessons from validated deployment
+
+- One physical device may need two stable client identities in the same profile: its LAN IPv4 address and its Tailscale 100.x address. Prefer automatic discovery/linking over manual address entry.
+- Do not use rotating Android IPv6 privacy addresses as profile identities.
+- The direct Pi-hole IPv6 macvlan endpoint solves IPv6 reachability, but it does not force stock ASUSWRT to advertise Pi-hole itself as RDNSS. Stock ASUSWRT may still advertise the router and proxy IPv6 DNS to Pi-hole, which preserves filtering but can hide the original client identity.
+- Do not assume every query logged from the router came from a downstream client. Routers generate their own DNS traffic too. Correlate with a unique test hostname or stronger packet evidence.
+- DNS silence while browsing is not proof of failure. DNS answers and HTTP/2/HTTP/3 connections can remain cached.
+- Firefox DoH must be checked separately from Android Private DNS. Browser-level DoH can bypass Pi-hole even when system DNS is correct.
+- Android Wi-Fi proxy should remain None unless Arachnidium is intentionally being used. Auto-config is not a DNS fix.
+- A packet capture on OMV cannot observe a phone-to-router DNS packet if that packet terminates at the router.
+- Use rdisc6 to inspect the actual IPv6 RDNSS advertisement. Do not infer the advertiser only from the delegated prefix.
+- After recreating Pi-hole, confirm FTL is ready and listening on port 53 before treating an immediate connection failure as a network-design failure.
+- tailscale netcheck proves NAT/UDP/IPv4/IPv6 capability, not that every peer path is direct. Use tailscale ping against a specific peer to distinguish direct from DERP.
+
+## pihm invariants
+
+- Pi-hole group id 0 is the built-in Default group. Do not treat it as an ordinary captured profile.
+- One normal pihm profile may be the persistent Default fallback.
+- The fallback mirrors blocklist and allow/deny/TLD assignments into Pi-hole Default. It does not copy client assignments.
+- Cloning a profile must not clone its Default-fallback status.
+- Syncing the selected fallback profile must keep Pi-hole Default mirrored to it.
+- A balanced profile such as Home Router is the recommended fallback for otherwise-unassigned home clients; explicitly assigned clients may use stricter profiles.
+- Arachnidium remains optional and opt-in. Reserving an endpoint is metadata only and must not be described as deploying or forcing a proxy.
+
+## Validated router pattern
+
+For the validated AT&T BGW320-500 plus stock ASUSWRT arrangement:
+
+- BGW320 keeps IPv6, DHCPv6, and DHCPv6 Prefix Delegation enabled, with IPv4 IP Passthrough left intact.
+- ASUS uses Native IPv6 with DHCP-PD enabled, Stateless LAN autoconfiguration, Router Advertisement enabled, and the IPv6 firewall enabled.
+- ASUS IPv4 DHCP advertises Pi-hole directly and does not additionally advertise the router as IPv4 DNS.
+- Stock ASUSWRT may still advertise its own LAN IPv6 address as RDNSS even when Pi-hole is configured as the IPv6 DNS target. Treat this as a client-identity limitation, not a filtering failure.
+- Keep IPv6 enabled. Native IPv6 and Tailscale IPv6 capability were both validated successfully.
+
+## Live-stack preservation
+
+- Before any Compose recreation, inspect the running container's com.docker.compose.project.config_files label and preserve every active overlay.
+- The public repository contains generic examples. A live /docker/pihole/compose.yml may include deployment-specific addresses, hosts, mounts, certificates, or secrets. Never overwrite it from an example without comparing the live stack first.
+- Residential DHCPv6-PD prefixes can change. Update the IPv6 macvlan subnet, gateway, Pi-hole address, and router DNS target together when that happens.
