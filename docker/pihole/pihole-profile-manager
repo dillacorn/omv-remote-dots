@@ -63,7 +63,7 @@ def load(path, cat):
                 die(f"{path}: proxy docker_ip must be IPv4")
         except ValueError:
             die(f"{path}: invalid proxy docker_ip: {proxy_ip}")
-    return dict(path=path,name=name,description=c.get("profile","description",fallback="Managed Pi-hole profile").strip() or "Managed Pi-hole profile",keys=keys,extra=lines(c.get("lists","extra_urls",fallback="")),allow=lines(c.get("allow","domains",fallback="")),deny=lines(c.get("deny","domains",fallback="")),tlds=lines(c.get("deny","tlds",fallback="")),clients=clients,proxy_enabled=proxy_enabled,proxy_port=int(proxy_port) if proxy_port.isdigit() else None,proxy_ip=proxy_ip,proxy_label=proxy_label)
+    return dict(path=path,name=name,description=c.get("profile","description",fallback="Managed Pi-hole profile").strip() or "Managed Pi-hole profile",is_default=c.getboolean("profile","default",fallback=False),keys=keys,extra=lines(c.get("lists","extra_urls",fallback="")),allow=lines(c.get("allow","domains",fallback="")),deny=lines(c.get("deny","domains",fallback="")),tlds=lines(c.get("deny","tlds",fallback="")),clients=clients,proxy_enabled=proxy_enabled,proxy_port=int(proxy_port) if proxy_port.isdigit() else None,proxy_ip=proxy_ip,proxy_label=proxy_label)
 
 def find(name, cat):
     m=[load(p,cat) for p in pfiles() if load(p,cat)["name"].casefold()==name.casefold()]
@@ -82,10 +82,10 @@ def backup():
     while out.exists(): out=Path(f"{base}.{n}"); n+=1
     a=con(); b=sqlite3.connect(out); a.backup(b); b.close(); a.close(); print(f"Backup: {out}")
 
-def write_profile(path,name,keys,extra=None,allow=None,deny=None,tlds=None,clients=None,description="Managed Pi-hole profile",proxy=None):
+def write_profile(path,name,keys,extra=None,allow=None,deny=None,tlds=None,clients=None,description="Managed Pi-hole profile",proxy=None,is_default=False):
     c=configparser.ConfigParser(interpolation=None); c.optionxform=str
     px=proxy or {}
-    c["profile"]={"name":name,"description":description}; c["lists"]={"keys":"\n"+"\n".join(keys),"extra_urls":"\n"+"\n".join(extra or [])}; c["allow"]={"domains":"\n"+"\n".join(allow or [])}; c["deny"]={"domains":"\n"+"\n".join(deny or []),"tlds":"\n"+"\n".join(tlds or [])}; c["clients"]={"entries":"\n"+"\n".join(f"{a} | {l}" if l else a for a,l in (clients or []))}
+    c["profile"]={"name":name,"description":description,"default":"true" if is_default else "false"}; c["lists"]={"keys":"\n"+"\n".join(keys),"extra_urls":"\n"+"\n".join(extra or [])}; c["allow"]={"domains":"\n"+"\n".join(allow or [])}; c["deny"]={"domains":"\n"+"\n".join(deny or []),"tlds":"\n"+"\n".join(tlds or [])}; c["clients"]={"entries":"\n"+"\n".join(f"{a} | {l}" if l else a for a,l in (clients or []))}
     c["proxy"]={"enabled":"true" if px.get("enabled") else "false","port":str(px.get("port") or ""),"docker_ip":str(px.get("docker_ip") or ""),"label":str(px.get("label") or "")}
     path.parent.mkdir(parents=True,exist_ok=True)
     with path.open("w",encoding="utf-8") as f: c.write(f)
@@ -113,6 +113,47 @@ def ensure_rule(c,typ,pattern):
     rid=int(r["id"]); c.execute("UPDATE domainlist SET enabled=1,date_modified=?,comment=? WHERE id=?",(n,OWNER,rid)); return rid
 
 def reload(gravity=False): subprocess.run(["docker","exec",CONTAINER,"pihole","-g" if gravity else "reloaddns"],check=True)
+
+def mirror_default_group(c,gid,p):
+    if not p.get("is_default"):
+        return
+    row=c.execute('SELECT id FROM "group" WHERE id=0 AND name=?',("Default",)).fetchone()
+    if row is None:
+        die("Pi-hole Default group (id 0) not found")
+    default_id=int(row["id"])
+    c.execute("DELETE FROM adlist_by_group WHERE group_id=?",(default_id,))
+    c.execute(
+        "INSERT OR IGNORE INTO adlist_by_group(adlist_id,group_id) SELECT adlist_id,? FROM adlist_by_group WHERE group_id=?",
+        (default_id,gid),
+    )
+    c.execute("DELETE FROM domainlist_by_group WHERE group_id=?",(default_id,))
+    c.execute(
+        "INSERT OR IGNORE INTO domainlist_by_group(domainlist_id,group_id) SELECT domainlist_id,? FROM domainlist_by_group WHERE group_id=?",
+        (default_id,gid),
+    )
+    c.execute(
+        'UPDATE "group" SET enabled=1,date_modified=?,description=? WHERE id=?',
+        (ts(),f"Default policy mirrors {p['name']}",default_id),
+    )
+
+def get_default_profile(cat):
+    found=[load(path,cat) for path in pfiles() if load(path,cat).get("is_default")]
+    if len(found)>1:
+        die("multiple profiles are marked default: "+", ".join(p["name"] for p in found))
+    return found[0] if found else None
+
+def set_default_profile(name,cat):
+    target=find(name,cat)
+    for path in pfiles():
+        c=cfg(path)
+        if not c.has_section("profile"):
+            continue
+        c.set("profile","default","true" if path==target["path"] else "false")
+        path.write_text(_dump(c),encoding="utf-8")
+    target=load(target["path"],cat)
+    apply_one(target,cat)
+    reload(False)
+    print(f"Default -> {target['name']}")
 
 def apply_one(p,cat):
     backup(); c=con(True); urls={u for u,_ in cat.values()}; selected=[cat[k] for k in p["keys"]]+[(u,f"Custom blocklist: {u}") for u in p["extra"]]
@@ -146,6 +187,7 @@ def apply_one(p,cat):
             cid=int(r["id"]) if r else c.execute("INSERT INTO client(ip,date_added,date_modified,comment) VALUES(?,?,?,?)",(addr,n,n,mark)).lastrowid
             c.execute("UPDATE client SET comment=?,date_modified=? WHERE id=?",(mark,n,cid)); c.execute("DELETE FROM client_by_group WHERE client_id=?",(cid,)); c.execute("INSERT OR IGNORE INTO client_by_group VALUES(?,?)",(cid,gid))
         c.execute("DELETE FROM adlist WHERE NOT EXISTS(SELECT 1 FROM adlist_by_group x WHERE x.adlist_id=adlist.id) AND address LIKE '%/domains/%'")
+        mirror_default_group(c,gid,p)
     c.close()
 
 def capture(name,cat,overwrite=False):
@@ -175,7 +217,7 @@ def cmd_new(a,cat):
     path=PROFILES/f"{slug(a.name)}.ini"
     if path.exists() and not a.force: die(f"profile exists: {path}")
     if a.clone:
-        src=find(a.clone,cat); shutil.copy2(src["path"],path); c=cfg(path); c.set("profile","name",a.name); c.set("profile","description",f"Cloned from {src['name']}");
+        src=find(a.clone,cat); shutil.copy2(src["path"],path); c=cfg(path); c.set("profile","name",a.name); c.set("profile","description",f"Cloned from {src['name']}"); c.set("profile","default","false");
         with path.open("w",encoding="utf-8") as f: c.write(f)
     else: write_profile(path,a.name,PRESETS.get(a.preset,[]),deny=SONOS if a.preset else [])
     print(path)
@@ -262,7 +304,7 @@ def main():
             os.execv(sys.executable,[sys.executable,str(tui)])
     p=argparse.ArgumentParser(); p.add_argument("--db",type=Path,default=DB); p.add_argument("--container",default=CONTAINER); p.add_argument("--profiles-dir",type=Path,default=PROFILES); p.add_argument("--catalog",type=Path,default=CATALOG); s=p.add_subparsers(dest="cmd",required=True)
     s.add_parser("list"); q=s.add_parser("show"); q.add_argument("name"); q=s.add_parser("new"); q.add_argument("name"); q.add_argument("--preset",choices=PRESETS); q.add_argument("--clone"); q.add_argument("--force",action="store_true"); q=s.add_parser("edit"); q.add_argument("name"); q=s.add_parser("capture"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--overwrite",action="store_true"); q=s.add_parser("apply"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--gravity",action="store_true"); q=s.add_parser("assign"); q.add_argument("name"); q.add_argument("address"); q.add_argument("--label",default=""); q=s.add_parser("unassign"); q.add_argument("address"); s.add_parser("status"); s.add_parser("gravity"); q=s.add_parser("timer"); q.add_argument("action",choices=["install","remove","status"]); q.add_argument("--on-calendar",default="*-*-* 03:15:00")
-    q=s.add_parser("proxy"); px=q.add_subparsers(dest="proxy_cmd",required=True); px.add_parser("list"); z=px.add_parser("set"); z.add_argument("name"); z.add_argument("--port",type=int,required=True); z.add_argument("--docker-ip",required=True); z.add_argument("--label",default=""); z=px.add_parser("disable"); z.add_argument("name")
+    q=s.add_parser("default"); q.add_argument("name",nargs="?"); q=s.add_parser("proxy"); px=q.add_subparsers(dest="proxy_cmd",required=True); px.add_parser("list"); z=px.add_parser("set"); z.add_argument("name"); z.add_argument("--port",type=int,required=True); z.add_argument("--docker-ip",required=True); z.add_argument("--label",default=""); z=px.add_parser("disable"); z.add_argument("name")
     a=p.parse_args(); DB=a.db; CONTAINER=a.container; PROFILES=a.profiles_dir; CATALOG=a.catalog; cat=catalog(); PROFILES.mkdir(parents=True,exist_ok=True)
     if a.cmd=="list":
         for f in pfiles(): print(load(f,cat)["name"],"\t",f.name)
@@ -281,6 +323,11 @@ def main():
     elif a.cmd=="assign": cmd_assign(a,cat)
     elif a.cmd=="unassign": cmd_assign(a,cat,True)
     elif a.cmd=="status": status()
+    elif a.cmd=="default":
+        if a.name: set_default_profile(a.name,cat)
+        else:
+            p0=get_default_profile(cat)
+            print(p0["name"] if p0 else "No default profile configured.")
     elif a.cmd=="gravity": reload(True)
     elif a.cmd=="timer": timer(a.action,a.on_calendar)
     elif a.cmd=="proxy":
