@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse, configparser, os, re, shutil, sqlite3, subprocess, sys, time
+import argparse, configparser, ipaddress, os, re, shutil, sqlite3, subprocess, sys, time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -49,7 +49,21 @@ def load(path, cat):
     clients=[]
     for v in lines(c.get("clients","entries",fallback="")):
         a,sep,l=v.partition("|"); clients.append((a.strip(),l.strip() if sep else ""))
-    return dict(path=path,name=name,description=c.get("profile","description",fallback="Managed Pi-hole profile").strip() or "Managed Pi-hole profile",keys=keys,extra=lines(c.get("lists","extra_urls",fallback="")),allow=lines(c.get("allow","domains",fallback="")),deny=lines(c.get("deny","domains",fallback="")),tlds=lines(c.get("deny","tlds",fallback="")),clients=clients)
+    proxy_enabled=c.getboolean("proxy","enabled",fallback=False)
+    proxy_port=c.get("proxy","port",fallback="").strip()
+    proxy_ip=c.get("proxy","docker_ip",fallback="").strip()
+    proxy_label=c.get("proxy","label",fallback="").strip()
+    if proxy_enabled:
+        if not proxy_port.isdigit() or not (1024 <= int(proxy_port) <= 65535):
+            die(f"{path}: enabled proxy requires port 1024-65535")
+        if not proxy_ip:
+            die(f"{path}: enabled proxy requires docker_ip")
+        try:
+            if ipaddress.ip_address(proxy_ip).version != 4:
+                die(f"{path}: proxy docker_ip must be IPv4")
+        except ValueError:
+            die(f"{path}: invalid proxy docker_ip: {proxy_ip}")
+    return dict(path=path,name=name,description=c.get("profile","description",fallback="Managed Pi-hole profile").strip() or "Managed Pi-hole profile",keys=keys,extra=lines(c.get("lists","extra_urls",fallback="")),allow=lines(c.get("allow","domains",fallback="")),deny=lines(c.get("deny","domains",fallback="")),tlds=lines(c.get("deny","tlds",fallback="")),clients=clients,proxy_enabled=proxy_enabled,proxy_port=int(proxy_port) if proxy_port.isdigit() else None,proxy_ip=proxy_ip,proxy_label=proxy_label)
 
 def find(name, cat):
     m=[load(p,cat) for p in pfiles() if load(p,cat)["name"].casefold()==name.casefold()]
@@ -68,9 +82,11 @@ def backup():
     while out.exists(): out=Path(f"{base}.{n}"); n+=1
     a=con(); b=sqlite3.connect(out); a.backup(b); b.close(); a.close(); print(f"Backup: {out}")
 
-def write_profile(path,name,keys,extra=None,allow=None,deny=None,tlds=None,clients=None,description="Managed Pi-hole profile"):
+def write_profile(path,name,keys,extra=None,allow=None,deny=None,tlds=None,clients=None,description="Managed Pi-hole profile",proxy=None):
     c=configparser.ConfigParser(interpolation=None); c.optionxform=str
+    px=proxy or {}
     c["profile"]={"name":name,"description":description}; c["lists"]={"keys":"\n"+"\n".join(keys),"extra_urls":"\n"+"\n".join(extra or [])}; c["allow"]={"domains":"\n"+"\n".join(allow or [])}; c["deny"]={"domains":"\n"+"\n".join(deny or []),"tlds":"\n"+"\n".join(tlds or [])}; c["clients"]={"entries":"\n"+"\n".join(f"{a} | {l}" if l else a for a,l in (clients or []))}
+    c["proxy"]={"enabled":"true" if px.get("enabled") else "false","port":str(px.get("port") or ""),"docker_ip":str(px.get("docker_ip") or ""),"label":str(px.get("label") or "")}
     path.parent.mkdir(parents=True,exist_ok=True)
     with path.open("w",encoding="utf-8") as f: c.write(f)
 
@@ -100,6 +116,11 @@ def reload(gravity=False): subprocess.run(["docker","exec",CONTAINER,"pihole","-
 
 def apply_one(p,cat):
     backup(); c=con(True); urls={u for u,_ in cat.values()}; selected=[cat[k] for k in p["keys"]]+[(u,f"Custom blocklist: {u}") for u in p["extra"]]
+    managed_clients=list(p["clients"])
+    if p.get("proxy_enabled"):
+        label=p.get("proxy_label") or f"arachnidium-{slug(p['name'])}"
+        managed_clients=[(a,l) for a,l in managed_clients if a != p["proxy_ip"]]
+        managed_clients.append((p["proxy_ip"],label))
     with c:
         gid=ensure_group(c,p)
         # Remove this group from known catalog lists, manager-owned rules, and old vendor-native files.
@@ -116,11 +137,11 @@ def apply_one(p,cat):
                 rid=ensure_rule(c,typ,rx(d)); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
         for t in p["tlds"]:
             rid=ensure_rule(c,3,rx(t.lstrip("."))); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
-        prefix=f"{CLIENT_TAG}{p['name']}:"; wanted={a:l for a,l in p["clients"]}
+        prefix=f"{CLIENT_TAG}{p['name']}:"; wanted={a:l for a,l in managed_clients}
         for r in c.execute("SELECT id,ip FROM client WHERE comment LIKE ?",(prefix+"%",)).fetchall():
             if r["ip"] not in wanted:
                 cid=int(r["id"]); c.execute("DELETE FROM client_by_group WHERE client_id=?",(cid,)); c.execute("INSERT OR IGNORE INTO client_by_group VALUES(?,0)",(cid,)); c.execute("UPDATE client SET comment='',date_modified=? WHERE id=?",(ts(),cid))
-        for addr,label in p["clients"]:
+        for addr,label in managed_clients:
             r=c.execute("SELECT id FROM client WHERE ip=?",(addr,)).fetchone(); mark=prefix+(label or addr); n=ts()
             cid=int(r["id"]) if r else c.execute("INSERT INTO client(ip,date_added,date_modified,comment) VALUES(?,?,?,?)",(addr,n,n,mark)).lastrowid
             c.execute("UPDATE client SET comment=?,date_modified=? WHERE id=?",(mark,n,cid)); c.execute("DELETE FROM client_by_group WHERE client_id=?",(cid,)); c.execute("INSERT OR IGNORE INTO client_by_group VALUES(?,?)",(cid,gid))
@@ -182,6 +203,44 @@ def cmd_assign(a,cat,remove=False):
 def _dump(c):
     import io; s=io.StringIO(); c.write(s); return s.getvalue()
 
+def set_proxy_config(path,enabled,port=None,docker_ip="",label=""):
+    c=cfg(path)
+    if not c.has_section("proxy"): c.add_section("proxy")
+    c.set("proxy","enabled","true" if enabled else "false")
+    c.set("proxy","port",str(port or ""))
+    c.set("proxy","docker_ip",docker_ip if enabled else "")
+    c.set("proxy","label",label if enabled else "")
+    path.write_text(_dump(c),encoding="utf-8")
+
+def proxy_list(cat):
+    found=False
+    for path in pfiles():
+        p=load(path,cat)
+        if not p["proxy_enabled"]: continue
+        found=True
+        label=p["proxy_label"] or f"arachnidium-{slug(p['name'])}"
+        print(f"{p['name']}\tport={p['proxy_port']}\tdocker_ip={p['proxy_ip']}\tlabel={label}")
+    if not found: print("No profile proxies configured.")
+
+def proxy_set(args,cat):
+    p=find(args.name,cat)
+    if not (1024 <= args.port <= 65535): die("proxy port must be 1024-65535")
+    try:
+        ip=ipaddress.ip_address(args.docker_ip)
+    except ValueError:
+        die(f"invalid proxy docker IP: {args.docker_ip}")
+    if ip.version != 4: die("proxy docker IP must be IPv4")
+    for other_path in pfiles():
+        other=load(other_path,cat)
+        if other["path"]==p["path"] or not other["proxy_enabled"]: continue
+        if other["proxy_port"]==args.port: die(f"proxy port {args.port} already belongs to {other['name']}")
+        if other["proxy_ip"]==args.docker_ip: die(f"proxy docker IP {args.docker_ip} already belongs to {other['name']}")
+    set_proxy_config(p["path"],True,args.port,args.docker_ip,args.label or f"arachnidium-{slug(p['name'])}")
+    print(f"{p['name']}: proxy port {args.port}, docker IP {args.docker_ip}")
+
+def proxy_disable(args,cat):
+    p=find(args.name,cat); set_proxy_config(p["path"],False); print(f"{p['name']}: proxy disabled")
+
 def status():
     c=con();
     for r in c.execute('SELECT g.id,g.name,COUNT(DISTINCT cg.client_id) clients,COUNT(DISTINCT ag.adlist_id) lists,COUNT(DISTINCT dg.domainlist_id) rules FROM "group" g LEFT JOIN client_by_group cg ON cg.group_id=g.id LEFT JOIN adlist_by_group ag ON ag.group_id=g.id LEFT JOIN domainlist_by_group dg ON dg.group_id=g.id GROUP BY g.id ORDER BY g.id'): print(f"{r['id']:>2} {r['name']} clients={r['clients']} lists={r['lists']} rules={r['rules']}")
@@ -203,6 +262,7 @@ def main():
             os.execv(sys.executable,[sys.executable,str(tui)])
     p=argparse.ArgumentParser(); p.add_argument("--db",type=Path,default=DB); p.add_argument("--container",default=CONTAINER); p.add_argument("--profiles-dir",type=Path,default=PROFILES); p.add_argument("--catalog",type=Path,default=CATALOG); s=p.add_subparsers(dest="cmd",required=True)
     s.add_parser("list"); q=s.add_parser("show"); q.add_argument("name"); q=s.add_parser("new"); q.add_argument("name"); q.add_argument("--preset",choices=PRESETS); q.add_argument("--clone"); q.add_argument("--force",action="store_true"); q=s.add_parser("edit"); q.add_argument("name"); q=s.add_parser("capture"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--overwrite",action="store_true"); q=s.add_parser("apply"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--gravity",action="store_true"); q=s.add_parser("assign"); q.add_argument("name"); q.add_argument("address"); q.add_argument("--label",default=""); q=s.add_parser("unassign"); q.add_argument("address"); s.add_parser("status"); s.add_parser("gravity"); q=s.add_parser("timer"); q.add_argument("action",choices=["install","remove","status"]); q.add_argument("--on-calendar",default="*-*-* 03:15:00")
+    q=s.add_parser("proxy"); px=q.add_subparsers(dest="proxy_cmd",required=True); px.add_parser("list"); z=px.add_parser("set"); z.add_argument("name"); z.add_argument("--port",type=int,required=True); z.add_argument("--docker-ip",required=True); z.add_argument("--label",default=""); z=px.add_parser("disable"); z.add_argument("name")
     a=p.parse_args(); DB=a.db; CONTAINER=a.container; PROFILES=a.profiles_dir; CATALOG=a.catalog; cat=catalog(); PROFILES.mkdir(parents=True,exist_ok=True)
     if a.cmd=="list":
         for f in pfiles(): print(load(f,cat)["name"],"\t",f.name)
@@ -223,5 +283,9 @@ def main():
     elif a.cmd=="status": status()
     elif a.cmd=="gravity": reload(True)
     elif a.cmd=="timer": timer(a.action,a.on_calendar)
+    elif a.cmd=="proxy":
+        if a.proxy_cmd=="list": proxy_list(cat)
+        elif a.proxy_cmd=="set": proxy_set(a,cat)
+        elif a.proxy_cmd=="disable": proxy_disable(a,cat)
 
 if __name__=="__main__": main()
