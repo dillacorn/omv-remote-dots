@@ -86,7 +86,7 @@ def menu(name,items,sub="",default=0,footer="Up/Down or j/k = move   Enter = sel
         elif k=="HOME": i=0
         elif k=="END": i=len(items)-1
         elif k=="ENTER": return i
-        elif lo=="h" and "help_screen" in globals():
+        elif lo=="h" and name!="Help" and "help_screen" in globals():
             help_screen()
         elif k=="ESC" or lo in {"q","b"}: return None
         elif lo.isdigit() and lo!="0" and int(lo)<=len(items): return int(lo)-1
@@ -578,39 +578,199 @@ def update_pihm():
 
 
 def help_screen():
-    show_text("Help",f"""Navigation
+    topics=[
+        "Start here            what pihm actually manages",
+        "Profiles              what a profile means",
+        "Sync to Pi-hole       when to use it",
+        "Gravity / blocklists  what Gravity actually is",
+        "Arachnidium           what the proxy does",
+        "Connect to a proxy    phone / browser example",
+        "Daily updates         keeping blocklists current",
+        "Navigation            keys and controls",
+        "Files                 where configuration lives",
+        "Back",
+    ]
+    while True:
+        c=menu("Help",topics,"Plain-language guide to Pi-hole profiles, blocklists, and Arachnidium.")
+        if c is None or c==len(topics)-1:
+            return
+        if c==0:
+            show_text("Help: Start here","""pihm manages two separate things:
 
-  Up/Down or j/k    Move (holding arrows repeats)
-  Enter             Select / toggle
-  h                 Help from any menu
-  q or Esc          Back
-  PgUp/PgDn         Scroll
+1. Pi-hole profiles
+   These decide WHAT DNS names are blocked for a group of clients.
 
-How this works
+2. Optional Arachnidium endpoints
+   These are opt-in web proxies for clients that want Arachnidium's
+   compression/data-saving features.
 
-  Profile INI = saved configuration in /docker/pihole/profiles.d.
-  Sync to Pi-hole = write that profile configuration into live Pi-hole and reload DNS.
-  Sync + refresh lists = same sync, then download current blocklist contents and rebuild Gravity.
-  Blocklists do not stream/update continuously; Gravity must run to fetch newer URL contents.
-  Maintenance can enable a daily Gravity/blocklist-update timer.
+You do NOT need Arachnidium for Pi-hole filtering.
 
-Arachnidium
+Normal use:
+  device -> Internet
+  device DNS -> Pi-hole profile
 
-  A Pi-hole profile does not need a proxy.
-  Reserving an Arachnidium endpoint stores a host port and private Docker IP for that profile.
-  Reservation does NOT deploy/start Arachnidium and does NOT proxy the whole profile.
-  A client uses Arachnidium only when that client/browser explicitly uses the reserved host:port.
-  Turning the client proxy setting back to None/Off bypasses Arachnidium while Pi-hole DNS filtering still works.
+Optional Arachnidium use:
+  device/browser -> Arachnidium proxy -> Internet
+  Arachnidium DNS -> that Pi-hole profile
+""")
+        elif c==1:
+            show_text("Help: Profiles","""A profile is a saved Pi-hole policy.
 
-Files
+It can contain:
+  - blocklists
+  - allowed domains
+  - denied domains
+  - blocked TLDs
+  - client assignments
 
-  Manager:  {MANAGER}
-  Profiles: {M['PROFILES']}
-  Catalog:  {M['CATALOG']}
-  DB:       {M['DB']}
+Example:
+  Home Router
+    HaGeZi Normal
+    OISD
+    security lists
+    your allow/deny rules
 
-CLI automation remains available with:
-  {MANAGER} --help
+A profile does NOT automatically mean proxy.
+A device can use the profile through normal Pi-hole DNS with no Arachnidium.
+""")
+        elif c==2:
+            show_text("Help: Sync to Pi-hole","""Editing a profile changes its saved INI file first.
+
+Sync to Pi-hole:
+  - writes that saved profile into live Pi-hole
+  - updates list-to-profile assignments
+  - updates allow/deny rules and blocked TLDs
+  - updates clients and any reserved proxy Docker IP
+  - reloads DNS
+  - does NOT redownload the blocklist files
+
+Use Sync to Pi-hole after changing normal profile settings.
+
+Sync + refresh lists does the same sync, then also downloads fresh blocklists.
+""")
+        elif c==3:
+            show_text("Help: Gravity / blocklists","""Gravity is just Pi-hole's name for its blocklist download/build process.
+
+Simple version:
+
+  blocklist URLs
+       |
+       v
+  Gravity downloads them
+       |
+       v
+  Pi-hole builds a local blocking database
+       |
+       v
+  DNS requests are checked against that local database
+
+Pi-hole does NOT contact HaGeZi/OISD for every DNS request.
+
+Refresh blocklists = run Gravity again:
+  - download the latest list contents
+  - parse them
+  - rebuild Pi-hole's local blocking database
+
+You normally do not need to think about the word "Gravity".
+Think: "refresh my blocklists".
+""")
+        elif c==4:
+            show_text("Help: Arachnidium","""Arachnidium is OPTIONAL.
+
+It is an HTTP/HTTPS proxy that can reduce transferred data by rewriting/
+compressing web content.
+
+Important:
+  - reserving an endpoint does NOT start Arachnidium
+  - reserving an endpoint does NOT proxy the whole Pi-hole profile
+  - clients use Arachnidium only when they explicitly select that proxy
+  - turning the client proxy setting Off/None bypasses Arachnidium
+  - Pi-hole DNS filtering can keep working either way
+
+Example reservation:
+  Home Router -> port 18101 -> Docker IP 172.30.53.101
+
+That means:
+  "If an Arachnidium container is deployed for :18101, use the Home Router
+   Pi-hole policy for its DNS."
+
+It does NOT mean every Home Router client is now proxied.
+""")
+        elif c==5:
+            host,lan,tail=detected_proxy_addresses()
+            show_text("Help: Connect to a proxy",f"""A proxy must be DEPLOYED and RUNNING before this works.
+
+Example endpoint:
+  Host: {host}
+  Port: 18101
+
+Android Wi-Fi example:
+  Wi-Fi network -> Edit/Advanced -> Proxy -> Manual
+  Hostname: {host}
+  Port:     18101
+
+At home you can also use:
+  {lan}:18101
+
+Over Tailscale you can also use:
+  {tail}:18101
+
+The port selects the Arachnidium endpoint/profile.
+
+To stop using Arachnidium on that client:
+  set Proxy back to None/Off
+
+Pi-hole DNS filtering can continue normally.
+
+Because Arachnidium intercepts HTTPS, the client also needs the mitmproxy CA.
+Open http://mitm.it through the running proxy to install it.
+""")
+        elif c==6:
+            show_text("Help: Daily updates","""Blocklist URLs change over time.
+
+Pi-hole keeps a LOCAL copy. It does not watch those URLs continuously.
+
+You can refresh manually:
+  Maintenance -> Refresh blocklists now
+
+Recommended:
+  Maintenance -> Enable daily blocklist updates
+
+That runs Pi-hole's Gravity refresh once per day:
+  - downloads newer list contents
+  - rebuilds the local blocking database
+
+This updates blocklists only.
+It does not update the Pi-hole Docker image or pihm itself.
+""")
+        elif c==7:
+            show_text("Help: Navigation","""Up/Down or j/k   Move
+Hold Up/Down       Repeat movement
+Enter              Select / toggle
+h                  Open Help from menus
+q or Esc           Back
+PgUp/PgDn          Scroll long screens
+
+Profile edits save to the profile INI immediately.
+They do not change live Pi-hole until you choose Sync to Pi-hole
+or Sync + refresh lists.
+""")
+        elif c==8:
+            show_text("Help: Files",f"""Program:
+  {MANAGER}
+
+Saved profiles:
+  {M['PROFILES']}
+
+Blocklist catalog:
+  {M['CATALOG']}
+
+Pi-hole database:
+  {M['DB']}
+
+The profile INI files are the human-editable saved configuration.
+Pi-hole's database is the live configuration used by Pi-hole.
 """)
 
 
