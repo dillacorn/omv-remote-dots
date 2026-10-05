@@ -166,6 +166,33 @@ The proxy port is the address you enter in a browser/Android proxy setting. The 
 
 The manager converts allow/deny domains and TLDs into Pi-hole regex rules that also cover subdomains. It synchronizes its catalog lists and manager-owned rules/clients while leaving unrelated manual Pi-hole data alone.
 
+### Link a device without typing IPs
+
+Inside any profile, open **Clients -> Add / link device**. This is the recommended client-assignment workflow.
+
+`pihm` reads `tailscale status --json` and shows tailnet devices by friendly hostname, Tailscale IP, and online state. You can also enter a Tailscale hostname or full MagicDNS name instead of choosing from the list.
+
+After selecting a Tailscale device, `pihm`:
+
+1. adds its Tailscale IPv4 automatically;
+2. checks whether Tailscale currently has a direct connection to that same device from the local LAN and, when safe, uses that direct RFC1918 address as the LAN identity;
+3. otherwise shows recently seen Pi-hole/LAN clients, newest first, so the LAN IP can be selected instead of typed;
+4. stores both identities in the same profile; and
+5. offers to sync the profile to Pi-hole immediately.
+
+Example result:
+
+```ini
+[clients]
+entries =
+    100.108.157.125 | dillons-s24-1 - Tailscale
+    192.168.68.59 | dillons-s24-1 - LAN
+```
+
+Both addresses select the same Pi-hole policy. The LAN address is used when the device talks to Pi-hole locally; the Tailscale address is used when DNS reaches Pi-hole over Tailscale.
+
+`pihm` does not silently guess uncertain LAN matches. If Tailscale cannot provide a direct same-LAN endpoint and the hostname cannot be matched confidently, the TUI shows discovered LAN clients for explicit selection.
+
 ## Daily blocklist updates
 
 Pi-hole does not continuously stream changes from the configured list URLs. Gravity fetches the current contents when a Gravity rebuild runs.
