@@ -1,0 +1,27 @@
+# Optional NextDNS upstream override for dnsproxy.
+#
+# The base stack defaults to Quad9 DoH and is the recommended configuration.
+# Use this overlay only when NextDNS is intentionally desired as the encrypted
+# recursive upstream behind Pi-hole.
+#
+# Required:
+#   NEXTDNS_CONFIG_ID   e.g. abc123
+#
+# Apply with the same base Compose file used by the deployment:
+#
+#   NEXTDNS_CONFIG_ID=abc123 docker compose \
+#     -f compose.yml \
+#     -f compose.nextdns-upstream.yml \
+#     up -d --no-deps dnsproxy
+#
+# Do not configure NextDNS as a parallel client resolver beside Pi-hole.
+
+services:
+  dnsproxy:
+    command:
+      - "--listen=127.0.0.1"
+      - "--port=5053"
+      - "--upstream=https://dns.nextdns.io/${NEXTDNS_CONFIG_ID:?set NEXTDNS_CONFIG_ID}"
+      - "--bootstrap=9.9.9.9:53"
+      - "--bootstrap=149.112.112.112:53"
+      - "--bootstrap=2620:fe::fe:53"
