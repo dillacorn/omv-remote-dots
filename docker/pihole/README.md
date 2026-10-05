@@ -58,9 +58,9 @@ pihm
 
 Running `/docker/pihole/pihole-profile-manager` with no arguments opens the same TUI.
 
-Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, Enter selects or toggles, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
+Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, held arrow keys repeat, Enter selects or toggles, `h` opens Help from any menu, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
 
-The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, update `pihm` itself, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT]` or `[proxy off]` beside every profile.
+The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, update `pihm` itself, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT configured]` or `[no proxy]`. `[no proxy]` means the Pi-hole policy exists but no Arachnidium endpoint has been configured for it yet.
 
 On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/profiles.d/` without changing them.
 
@@ -84,6 +84,10 @@ Edit and apply a profile:
 /docker/pihole/pihole-profile-manager edit "Home Router"
 /docker/pihole/pihole-profile-manager apply "Home Router" --gravity
 ```
+
+In the TUI, **Apply Pi-hole policy** synchronizes the profile definition into Pi-hole: group description, selected list-to-group assignments, allow/deny regex rules, blocked TLDs, client assignments, and the configured proxy Docker IP. It creates a timestamped SQLite backup first, then reloads DNS. It does **not** redownload blocklists.
+
+**Apply + Gravity** performs the same policy sync and then runs a full Pi-hole Gravity rebuild/download. Use it after changing selected blocklists or when you explicitly want to refresh list contents.
 
 Create a new profile from a preset:
 
@@ -215,10 +219,12 @@ Pi-hole chooses a profile from the DNS client's source IP. A proxy therefore nee
 The TUI keeps the association visible. For example:
 
 ```text
-Home Router                         [proxy :18101]
-Security++ Windows & Android        [proxy :18102]
-Guest                               [proxy off]
+Home Router                         [proxy :18101 configured]
+Security++ Windows & Android        [proxy :18102 configured]
+Guest                               [no proxy]
 ```
+
+A configured port is metadata until the matching Arachnidium container is actually deployed and running. The connection-info screen reports that runtime state explicitly.
 
 Inside a profile, open **Proxy endpoint**. `pihm` can allocate the next recommended pair automatically, starting at host port `18101` and Docker IP `172.30.53.101`. The **Proxy endpoints** screen then shows the hostname, LAN address, Tailscale address, port, Docker IP, and whether the matching Arachnidium container is running.
 
