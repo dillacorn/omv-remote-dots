@@ -1,0 +1,38 @@
+x-arachnidium-common: &arachnidium-common
+  build:
+    context: .
+    args:
+      ARACHNIDIUM_REV: e9bf2fefe55ad6bf4e967ba074a009021dd3007e
+  restart: unless-stopped
+  dns:
+    - 172.30.53.2
+  volumes:
+    - ./state/mitmproxy:/root/.mitmproxy
+  networks:
+    pihole-proxy: {}
+
+services:
+  arachnidium-personal:
+    <<: *arachnidium-common
+    container_name: arachnidium-personal
+    networks:
+      pihole-proxy:
+        ipv4_address: 172.30.53.101
+    ports:
+      - "${LAN_IP}:18101:8080"
+      - "${TAILSCALE_IP}:18101:8080"
+
+  arachnidium-family:
+    <<: *arachnidium-common
+    container_name: arachnidium-family
+    networks:
+      pihole-proxy:
+        ipv4_address: 172.30.53.102
+    ports:
+      - "${LAN_IP}:18102:8080"
+      - "${TAILSCALE_IP}:18102:8080"
+
+networks:
+  pihole-proxy:
+    external: true
+    name: pihole-proxy

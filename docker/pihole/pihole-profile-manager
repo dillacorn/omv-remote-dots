@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse, configparser, os, re, shutil, sqlite3, subprocess, sys, time
+from pathlib import Path
+from urllib.parse import urlparse
+
+DB = Path(os.environ.get("PIHOLE_PROFILE_DB", "/docker/pihole/etc-pihole/gravity.db"))
+CONTAINER = os.environ.get("PIHOLE_CONTAINER", "pihole")
+PROFILES = Path(os.environ.get("PIHOLE_PROFILES_DIR", "/docker/pihole/profiles.d"))
+CATALOG = Path(os.environ.get("PIHOLE_PROFILE_CATALOG", "/docker/pihole/profile-catalog.ini"))
+OWNER = "Managed by pihole-profile-manager"
+CLIENT_TAG = "pihole-profile-manager:"
+SONOS = ["msmetrics.ws.sonos.com", "msmetrics-test.ws.sonos.com"]
+PRESETS = {
+    "normal": ["normal","oisd","tif","dga30","native_amazon","native_apple","native_huawei","native_roku","native_samsung","native_winoffice","native_xiaomi"],
+    "strict": ["proplus","oisd","tif","dga30","native_amazon","native_apple","native_huawei","native_roku","native_samsung","native_winoffice","native_xiaomi"],
+    "parental": ["normal","oisd","tif","dga30","dyndns","native_amazon","native_apple","native_huawei","native_roku","native_samsung","native_winoffice","native_xiaomi","nsfw","gambling","piracy","dating"],
+}
+NATIVE_PATH = {"alexa":"native_amazon","apple":"native_apple","huawei":"native_huawei","roku":"native_roku","samsung":"native_samsung","windows":"native_winoffice","xiaomi":"native_xiaomi"}
+
+
+def die(s): raise SystemExit(f"ERROR: {s}")
+def ts(): return int(time.time())
+def lines(s): return [x.strip() for x in s.splitlines() if x.strip() and not x.lstrip().startswith(("#",";"))]
+def slug(s): return re.sub(r"[^A-Za-z0-9._-]+","-",s.strip()).strip("-.").lower() or "profile"
+def rx(domain): return r"(^|\.)" + re.escape(domain.strip().rstrip(".").lower()).replace(r"\-","-") + r"$"
+
+def cfg(path):
+    c=configparser.ConfigParser(interpolation=None); c.optionxform=str
+    with path.open(encoding="utf-8") as f: c.read_file(f)
+    return c
+
+def catalog(path=CATALOG):
+    if not path.is_file(): die(f"catalog not found: {path}")
+    c=cfg(path); out={}
+    for k in c.sections():
+        u=c.get(k,"url",fallback="").strip()
+        if not u: die(f"catalog [{k}] missing url")
+        out[k]=(u,c.get(k,"comment",fallback=k).strip() or k)
+    return out
+
+def pfiles(): PROFILES.mkdir(parents=True,exist_ok=True); return sorted(PROFILES.glob("*.ini"))
+def load(path, cat):
+    c=cfg(path); name=c.get("profile","name",fallback="").strip()
+    if not name: die(f"{path}: missing profile name")
+    keys=lines(c.get("lists","keys",fallback="")); bad=[x for x in keys if x not in cat]
+    if bad: die(f"{path}: unknown list keys: {', '.join(bad)}")
+    clients=[]
+    for v in lines(c.get("clients","entries",fallback="")):
+        a,sep,l=v.partition("|"); clients.append((a.strip(),l.strip() if sep else ""))
+    return dict(path=path,name=name,description=c.get("profile","description",fallback="Managed Pi-hole profile").strip() or "Managed Pi-hole profile",keys=keys,extra=lines(c.get("lists","extra_urls",fallback="")),allow=lines(c.get("allow","domains",fallback="")),deny=lines(c.get("deny","domains",fallback="")),tlds=lines(c.get("deny","tlds",fallback="")),clients=clients)
+
+def find(name, cat):
+    m=[load(p,cat) for p in pfiles() if load(p,cat)["name"].casefold()==name.casefold()]
+    if len(m)!=1: die(f"profile {'not found' if not m else 'ambiguous'}: {name}")
+    return m[0]
+
+def con(write=False):
+    if not DB.is_file(): die(f"database not found: {DB}")
+    c=sqlite3.connect(f"file:{DB}?mode={'rw' if write else 'ro'}",uri=True); c.row_factory=sqlite3.Row; c.execute("PRAGMA foreign_keys=ON")
+    need={"group","client","client_by_group","adlist","adlist_by_group","domainlist","domainlist_by_group"}; have={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if need-have: die("unsupported gravity.db schema: "+", ".join(sorted(need-have)))
+    return c
+
+def backup():
+    stamp=time.strftime("%Y%m%d-%H%M%S"); base=DB.with_name(f"{DB.name}.backup-profile-manager-{stamp}"); out=base; n=1
+    while out.exists(): out=Path(f"{base}.{n}"); n+=1
+    a=con(); b=sqlite3.connect(out); a.backup(b); b.close(); a.close(); print(f"Backup: {out}")
+
+def write_profile(path,name,keys,extra=None,allow=None,deny=None,tlds=None,clients=None,description="Managed Pi-hole profile"):
+    c=configparser.ConfigParser(interpolation=None); c.optionxform=str
+    c["profile"]={"name":name,"description":description}; c["lists"]={"keys":"\n"+"\n".join(keys),"extra_urls":"\n"+"\n".join(extra or [])}; c["allow"]={"domains":"\n"+"\n".join(allow or [])}; c["deny"]={"domains":"\n"+"\n".join(deny or []),"tlds":"\n"+"\n".join(tlds or [])}; c["clients"]={"entries":"\n"+"\n".join(f"{a} | {l}" if l else a for a,l in (clients or []))}
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open("w",encoding="utf-8") as f: c.write(f)
+
+def native_hint(url):
+    p=urlparse(url).path.rstrip("/"); m=re.search(r"/domains/([^/]+)$",p)
+    return m.group(1).lower() if m else None
+
+def ensure_group(c,p):
+    r=c.execute('SELECT id FROM "group" WHERE name=?',(p["name"],)).fetchone(); n=ts()
+    if r is None: return c.execute('INSERT INTO "group"(enabled,name,date_added,date_modified,description) VALUES(1,?,?,?,?)',(p["name"],n,n,p["description"])).lastrowid
+    gid=int(r["id"]);
+    if gid==0: die("refusing to manage Default")
+    c.execute('UPDATE "group" SET enabled=1,date_modified=?,description=? WHERE id=?',(n,p["description"],gid)); return gid
+
+def ensure_list(c,url,comment):
+    r=c.execute("SELECT id,type FROM adlist WHERE address=?",(url,)).fetchone(); n=ts()
+    if r is None: return c.execute("INSERT INTO adlist(address,enabled,date_added,date_modified,comment,type) VALUES(?,1,?,?,?,0)",(url,n,n,comment)).lastrowid
+    if int(r["type"])!=0: die(f"non-block adlist exists: {url}")
+    c.execute("UPDATE adlist SET enabled=1,date_modified=?,comment=? WHERE id=?",(n,comment,int(r["id"]))); return int(r["id"])
+
+def ensure_rule(c,typ,pattern):
+    r=c.execute("SELECT id FROM domainlist WHERE type=? AND domain=? ORDER BY id LIMIT 1",(typ,pattern)).fetchone(); n=ts()
+    if r is None: return c.execute("INSERT INTO domainlist(type,domain,enabled,date_added,date_modified,comment) VALUES(?,?,1,?,?,?)",(typ,pattern,n,n,OWNER)).lastrowid
+    rid=int(r["id"]); c.execute("UPDATE domainlist SET enabled=1,date_modified=?,comment=? WHERE id=?",(n,OWNER,rid)); return rid
+
+def reload(gravity=False): subprocess.run(["docker","exec",CONTAINER,"pihole","-g" if gravity else "reloaddns"],check=True)
+
+def apply_one(p,cat):
+    backup(); c=con(True); urls={u for u,_ in cat.values()}; selected=[cat[k] for k in p["keys"]]+[(u,f"Custom blocklist: {u}") for u in p["extra"]]
+    with c:
+        gid=ensure_group(c,p)
+        # Remove this group from known catalog lists, manager-owned rules, and old vendor-native files.
+        for u in urls:
+            r=c.execute("SELECT id FROM adlist WHERE address=? AND type=0",(u,)).fetchone()
+            if r: c.execute("DELETE FROM adlist_by_group WHERE adlist_id=? AND group_id=?",(int(r["id"]),gid))
+        c.execute("DELETE FROM domainlist_by_group WHERE group_id=? AND domainlist_id IN (SELECT id FROM domainlist WHERE comment=?)",(gid,OWNER))
+        for r in c.execute("SELECT a.id,a.address FROM adlist a JOIN adlist_by_group x ON x.adlist_id=a.id WHERE x.group_id=?",(gid,)).fetchall():
+            if native_hint(r["address"]) in set(NATIVE_PATH)|{"sonos"}: c.execute("DELETE FROM adlist_by_group WHERE adlist_id=? AND group_id=?",(int(r["id"]),gid))
+        for u,comment in selected:
+            aid=ensure_list(c,u,comment); c.execute("DELETE FROM adlist_by_group WHERE adlist_id=? AND group_id=0",(aid,)); c.execute("INSERT OR IGNORE INTO adlist_by_group(adlist_id,group_id) VALUES(?,?)",(aid,gid))
+        for typ,items in ((2,p["allow"]),(3,p["deny"])):
+            for d in items:
+                rid=ensure_rule(c,typ,rx(d)); c.execute("DELETE FROM domainlist_by_group WHERE domainlist_id=? AND group_id=0",(rid,)); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
+        for t in p["tlds"]:
+            rid=ensure_rule(c,3,rx(t.lstrip("."))); c.execute("DELETE FROM domainlist_by_group WHERE domainlist_id=? AND group_id=0",(rid,)); c.execute("INSERT OR IGNORE INTO domainlist_by_group VALUES(?,?)",(rid,gid))
+        prefix=f"{CLIENT_TAG}{p['name']}:"; wanted={a:l for a,l in p["clients"]}
+        for r in c.execute("SELECT id,ip FROM client WHERE comment LIKE ?",(prefix+"%",)).fetchall():
+            if r["ip"] not in wanted:
+                cid=int(r["id"]); c.execute("DELETE FROM client_by_group WHERE client_id=?",(cid,)); c.execute("INSERT OR IGNORE INTO client_by_group VALUES(?,0)",(cid,)); c.execute("UPDATE client SET comment='',date_modified=? WHERE id=?",(ts(),cid))
+        for addr,label in p["clients"]:
+            r=c.execute("SELECT id FROM client WHERE ip=?",(addr,)).fetchone(); mark=prefix+(label or addr); n=ts()
+            cid=int(r["id"]) if r else c.execute("INSERT INTO client(ip,date_added,date_modified,comment) VALUES(?,?,?,?)",(addr,n,n,mark)).lastrowid
+            c.execute("UPDATE client SET comment=?,date_modified=? WHERE id=?",(mark,n,cid)); c.execute("DELETE FROM client_by_group WHERE client_id=?",(cid,)); c.execute("INSERT OR IGNORE INTO client_by_group VALUES(?,?)",(cid,gid))
+        c.execute("DELETE FROM adlist WHERE NOT EXISTS(SELECT 1 FROM adlist_by_group x WHERE x.adlist_id=adlist.id) AND address LIKE '%/domains/%'")
+    c.close()
+
+def capture(name,cat,overwrite=False):
+    c=con(); g=c.execute('SELECT id,description FROM "group" WHERE name=?',(name,)).fetchone()
+    if not g or int(g["id"])==0: die(f"non-default group not found: {name}")
+    gid=int(g["id"]); byurl={u:k for k,(u,_) in cat.items()}; keys=[]; extra=[]; deny=[]
+    for r in c.execute("SELECT a.address FROM adlist a JOIN adlist_by_group x ON x.adlist_id=a.id WHERE x.group_id=? AND a.enabled=1 AND a.type=0 ORDER BY a.id",(gid,)):
+        u=r["address"]
+        if u in byurl: keys.append(byurl[u]); continue
+        hint=native_hint(u)
+        if hint in NATIVE_PATH and NATIVE_PATH[hint] in cat: keys.append(NATIVE_PATH[hint]); continue
+        if hint=="sonos": deny.extend(x for x in SONOS if x not in deny); continue
+        extra.append(u)
+    allow=[]; tlds=[]
+    for r in c.execute("SELECT d.type,d.domain FROM domainlist d JOIN domainlist_by_group x ON x.domainlist_id=d.id WHERE x.group_id=? AND d.enabled=1 AND d.type IN(2,3)",(gid,)):
+        m=re.fullmatch(r"\(\^\|\\\.\)(.+)\$",r["domain"]); val=m.group(1).replace(r"\.",".") if m else None
+        if not val: continue
+        if int(r["type"])==2: allow.append(val)
+        elif "." in val: deny.append(val)
+        else: tlds.append(val)
+    clients=[(r["ip"],r["comment"] or "") for r in c.execute("SELECT c.ip,c.comment FROM client c JOIN client_by_group x ON x.client_id=c.id WHERE x.group_id=? ORDER BY c.ip",(gid,))]; c.close()
+    path=PROFILES/f"{slug(name)}.ini"
+    if path.exists() and not overwrite: die(f"profile file exists: {path}; use --overwrite")
+    write_profile(path,name,list(dict.fromkeys(keys)),extra,list(dict.fromkeys(allow)),list(dict.fromkeys(deny)),list(dict.fromkeys(tlds)),clients,g["description"] or "Managed Pi-hole profile"); print(path)
+
+def cmd_new(a,cat):
+    path=PROFILES/f"{slug(a.name)}.ini"
+    if path.exists() and not a.force: die(f"profile exists: {path}")
+    if a.clone:
+        src=find(a.clone,cat); shutil.copy2(src["path"],path); c=cfg(path); c.set("profile","name",a.name); c.set("profile","description",f"Cloned from {src['name']}");
+        with path.open("w",encoding="utf-8") as f: c.write(f)
+    else: write_profile(path,a.name,PRESETS.get(a.preset,[]),deny=SONOS if a.preset else [])
+    print(path)
+
+def cmd_assign(a,cat,remove=False):
+    if remove:
+        for path in pfiles():
+            c=cfg(path); vals=[]; changed=False
+            for v in lines(c.get("clients","entries",fallback="")):
+                addr,sep,label=v.partition("|");
+                if addr.strip()==a.address: changed=True
+                else: vals.append((addr.strip(),label.strip() if sep else ""))
+            if changed: c.set("clients","entries","\n"+"\n".join(f"{x} | {y}" if y else x for x,y in vals)); path.write_text(_dump(c),encoding="utf-8")
+        backup(); c=con(True)
+        with c:
+            r=c.execute("SELECT id FROM client WHERE ip=?",(a.address,)).fetchone()
+            if r: cid=int(r["id"]); c.execute("DELETE FROM client_by_group WHERE client_id=?",(cid,)); c.execute("INSERT OR IGNORE INTO client_by_group VALUES(?,0)",(cid,)); c.execute("UPDATE client SET comment='',date_modified=? WHERE id=?",(ts(),cid))
+        c.close(); reload(); print(f"{a.address} -> Default"); return
+    p=find(a.name,cat); c=cfg(p["path"]); vals=[]
+    for v in lines(c.get("clients","entries",fallback="")):
+        addr,sep,label=v.partition("|");
+        if addr.strip()!=a.address: vals.append((addr.strip(),label.strip() if sep else ""))
+    vals.append((a.address,a.label or "")); c.set("clients","entries","\n"+"\n".join(f"{x} | {y}" if y else x for x,y in vals)); p["path"].write_text(_dump(c),encoding="utf-8"); apply_one(load(p["path"],cat),cat); reload(); print(f"{a.address} -> {p['name']}")
+
+def _dump(c):
+    import io; s=io.StringIO(); c.write(s); return s.getvalue()
+
+def status():
+    c=con();
+    for r in c.execute('SELECT g.id,g.name,COUNT(DISTINCT cg.client_id) clients,COUNT(DISTINCT ag.adlist_id) lists,COUNT(DISTINCT dg.domainlist_id) rules FROM "group" g LEFT JOIN client_by_group cg ON cg.group_id=g.id LEFT JOIN adlist_by_group ag ON ag.group_id=g.id LEFT JOIN domainlist_by_group dg ON dg.group_id=g.id GROUP BY g.id ORDER BY g.id'): print(f"{r['id']:>2} {r['name']} clients={r['clients']} lists={r['lists']} rules={r['rules']}")
+    c.close()
+
+def timer(action,calendar):
+    svc=Path("/etc/systemd/system/pihole-gravity-daily.service"); tim=Path("/etc/systemd/system/pihole-gravity-daily.timer")
+    if action=="install":
+        svc.write_text(f"[Unit]\nDescription=Update Pi-hole Gravity lists\nAfter=docker.service\nRequires=docker.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/docker exec {CONTAINER} pihole -g\n")
+        tim.write_text(f"[Unit]\nDescription=Daily Pi-hole Gravity update\n\n[Timer]\nOnCalendar={calendar}\nPersistent=true\nRandomizedDelaySec=20m\n\n[Install]\nWantedBy=timers.target\n"); subprocess.run(["systemctl","daemon-reload"],check=True); subprocess.run(["systemctl","enable","--now",tim.name],check=True)
+    elif action=="remove": subprocess.run(["systemctl","disable","--now",tim.name],check=False); svc.unlink(missing_ok=True); tim.unlink(missing_ok=True); subprocess.run(["systemctl","daemon-reload"],check=True)
+    subprocess.run(["systemctl","status",tim.name,"--no-pager"],check=False)
+
+def main():
+    global DB,CONTAINER,PROFILES,CATALOG
+    p=argparse.ArgumentParser(); p.add_argument("--db",type=Path,default=DB); p.add_argument("--container",default=CONTAINER); p.add_argument("--profiles-dir",type=Path,default=PROFILES); p.add_argument("--catalog",type=Path,default=CATALOG); s=p.add_subparsers(dest="cmd",required=True)
+    s.add_parser("list"); q=s.add_parser("show"); q.add_argument("name"); q=s.add_parser("new"); q.add_argument("name"); q.add_argument("--preset",choices=PRESETS); q.add_argument("--clone"); q.add_argument("--force",action="store_true"); q=s.add_parser("edit"); q.add_argument("name"); q=s.add_parser("capture"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--overwrite",action="store_true"); q=s.add_parser("apply"); q.add_argument("name",nargs="?"); q.add_argument("--all",action="store_true"); q.add_argument("--gravity",action="store_true"); q=s.add_parser("assign"); q.add_argument("name"); q.add_argument("address"); q.add_argument("--label",default=""); q=s.add_parser("unassign"); q.add_argument("address"); s.add_parser("status"); s.add_parser("gravity"); q=s.add_parser("timer"); q.add_argument("action",choices=["install","remove","status"]); q.add_argument("--on-calendar",default="*-*-* 03:15:00")
+    a=p.parse_args(); DB=a.db; CONTAINER=a.container; PROFILES=a.profiles_dir; CATALOG=a.catalog; cat=catalog(); PROFILES.mkdir(parents=True,exist_ok=True)
+    if a.cmd=="list":
+        for f in pfiles(): print(load(f,cat)["name"],"\t",f.name)
+    elif a.cmd=="show": print(find(a.name,cat)["path"].read_text(),end="")
+    elif a.cmd=="new": cmd_new(a,cat)
+    elif a.cmd=="edit": subprocess.run([os.environ.get("EDITOR","nano"),str(find(a.name,cat)["path"])])
+    elif a.cmd=="capture":
+        names=[r[0] for r in con().execute('SELECT name FROM "group" WHERE id<>0 ORDER BY id')] if a.all else [a.name]
+        if not names or names==[None]: die("capture requires NAME or --all")
+        for n in names: capture(n,cat,a.overwrite)
+    elif a.cmd=="apply":
+        items=[load(f,cat) for f in pfiles()] if a.all else [find(a.name,cat)]
+        if not items: die("no profile files")
+        for x in items: apply_one(x,cat); print("Applied:",x["name"])
+        reload(a.gravity)
+    elif a.cmd=="assign": cmd_assign(a,cat)
+    elif a.cmd=="unassign": cmd_assign(a,cat,True)
+    elif a.cmd=="status": status()
+    elif a.cmd=="gravity": reload(True)
+    elif a.cmd=="timer": timer(a.action,a.on_calendar)
+
+if __name__=="__main__": main()

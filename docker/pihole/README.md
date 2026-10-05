@@ -1,10 +1,218 @@
-# Pi-hole local HTTPS routing
+# Pi-hole
 
-This setup keeps local web-app access working even when the Internet or the Tailscale control plane is unavailable.
+This stack uses Pi-hole as the filtering/policy layer and `dnsproxy` only as an encrypted upstream transport to Quad9.
 
-## Traffic paths
+```text
+client -> Pi-hole profile/group -> dnsproxy -> Quad9 DoH
+```
 
-Local LAN clients:
+The profile manager below keeps groups, lists, allow/deny rules, blocked TLDs, and client assignments editable as normal INI files instead of hand-editing `gravity.db`.
+
+## Profile manager
+
+Files:
+
+- `pihole-profile-manager` - management program
+- `profile-catalog.ini` - maintained blocklist URLs
+- `profile.example.ini` - editable profile example
+- `/docker/pihole/profiles.d/*.ini` - live profile definitions
+
+Install/update the manager into the live Pi-hole directory:
+
+```bash
+cd /path/to/omv-remote-dots/docker/pihole
+install -m 0755 pihole-profile-manager /docker/pihole/pihole-profile-manager
+install -m 0644 profile-catalog.ini /docker/pihole/profile-catalog.ini
+mkdir -p /docker/pihole/profiles.d
+```
+
+Capture existing non-default Pi-hole groups as editable profiles:
+
+```bash
+/docker/pihole/pihole-profile-manager capture --all
+```
+
+Inspect them:
+
+```bash
+/docker/pihole/pihole-profile-manager list
+/docker/pihole/pihole-profile-manager status
+/docker/pihole/pihole-profile-manager show "Home Router"
+```
+
+Edit and apply a profile:
+
+```bash
+/docker/pihole/pihole-profile-manager edit "Home Router"
+/docker/pihole/pihole-profile-manager apply "Home Router" --gravity
+```
+
+Create a new profile from a preset:
+
+```bash
+/docker/pihole/pihole-profile-manager new "Guest" --preset normal
+/docker/pihole/pihole-profile-manager edit "Guest"
+/docker/pihole/pihole-profile-manager apply "Guest" --gravity
+```
+
+Available presets:
+
+- `normal` - HaGeZi Normal + OISD + TIF + DGA30 + device tracker lists
+- `strict` - HaGeZi PRO++ + OISD + TIF + DGA30 + device tracker lists
+- `parental` - Normal plus NSFW, gambling, piracy, dating, and DynDNS lists
+
+Clone an existing profile:
+
+```bash
+/docker/pihole/pihole-profile-manager new "Tablet" --clone "Guest"
+```
+
+Assign a normal client or profile-aware proxy by IP:
+
+```bash
+/docker/pihole/pihole-profile-manager assign \
+    "Guest" 100.64.0.50 --label tablet
+```
+
+Return it to Pi-hole's Default group:
+
+```bash
+/docker/pihole/pihole-profile-manager unassign 100.64.0.50
+```
+
+Every database-changing command creates a timestamped online SQLite backup beside `gravity.db` before writing.
+
+### Profile format
+
+Start from `profile.example.ini`.
+
+```ini
+[profile]
+name = Example Strict
+description = My profile
+
+[lists]
+keys =
+    proplus
+    oisd
+    tif
+    dga30
+extra_urls =
+
+[allow]
+domains =
+    allowed.example
+
+[deny]
+domains =
+    blocked.example
+tlds =
+    zip
+
+[clients]
+entries =
+    100.64.0.50 | laptop
+    172.30.53.101 | arachnidium-personal
+```
+
+The manager converts allow/deny domains and TLDs into Pi-hole regex rules that also cover subdomains. It synchronizes its catalog lists and manager-owned rules/clients while leaving unrelated manual Pi-hole data alone.
+
+## Daily blocklist updates
+
+Install a persistent daily Gravity timer. Default run time is 03:15 with a randomized delay of up to 20 minutes:
+
+```bash
+/docker/pihole/pihole-profile-manager timer install
+```
+
+Use another local time if wanted:
+
+```bash
+/docker/pihole/pihole-profile-manager timer install \
+    --on-calendar '*-*-* 04:30:00'
+```
+
+Status/remove:
+
+```bash
+/docker/pihole/pihole-profile-manager timer status
+/docker/pihole/pihole-profile-manager timer remove
+```
+
+This updates blocklists only. It does not auto-update the Pi-hole container.
+
+## Tailscale DNS endpoint
+
+The base Compose file binds DNS only to the LAN IP. To make the same Pi-hole available as a tailnet DNS resolver without exposing port 53 publicly, add the optional Tailscale overlay:
+
+```bash
+cd /docker/pihole
+TAILSCALE_IP=100.64.0.10 docker compose \
+    -f compose.yml \
+    -f compose.tailscale-dns.yml \
+    up -d
+```
+
+Test it from another Tailscale device before changing tailnet DNS:
+
+```bash
+dig @100.64.0.10 example.com
+```
+
+Then configure the tailnet resolver to the OMV Tailscale IP. MagicDNS can remain enabled independently.
+
+Before relying on per-device groups over Tailscale, verify Pi-hole's query log shows the real `100.x` client address. If Docker source-NATs the request into one shared address, individual direct-client grouping will not work until that path is changed.
+
+## Profile-aware HTTP proxies
+
+Pi-hole chooses a profile from the DNS client's source IP. A proxy therefore needs a unique, stable Docker IP if different proxy endpoints should use different Pi-hole profiles.
+
+Create the private proxy network once:
+
+```bash
+docker network inspect pihole-proxy >/dev/null 2>&1 || \
+    docker network create --driver bridge --subnet 172.30.53.0/24 pihole-proxy
+```
+
+Attach Pi-hole at `172.30.53.2`:
+
+```bash
+cd /docker/pihole
+docker compose \
+    -f compose.yml \
+    -f compose.proxy-profiles.yml \
+    up -d
+```
+
+Each proxy container uses a unique `172.30.53.x` address, `172.30.53.2` as DNS, and its own host proxy port.
+
+Assign the proxy container IP to the profile:
+
+```bash
+/docker/pihole/pihole-profile-manager assign \
+    "Personal" 172.30.53.101 --label arachnidium-personal
+```
+
+See `../arachnidium/README.md` for the optional Arachnidium regular HTTP proxy example.
+
+### LAN and Tailscale proxy addresses
+
+For a proxy published on port `18101`:
+
+```text
+LAN:       192.168.1.10:18101
+Tailscale: 100.64.0.10:18101
+```
+
+Both addresses terminate at the same proxy container, so they use the same Pi-hole profile.
+
+For the exact same endpoint while home or remote, advertise the OMV LAN IP or LAN subnet as a Tailscale subnet route. Then clients can use `192.168.1.10:18101` in both places.
+
+Never expose a MITM proxy on a public/WAN address.
+
+## Local HTTPS routing
+
+Local LAN clients can resolve the normal tailnet service names through Pi-hole and reach `nginx-pihole` directly instead of bouncing through a Tailscale `100.x` address:
 
 ```text
 service.example-tailnet.ts.net
@@ -15,111 +223,25 @@ service.example-tailnet.ts.net
   -> application HTTP port
 ```
 
-Remote Tailscale clients continue using each service's normal remote path. Most services use a Tailscale Serve sidecar. Obico is intentionally different: its web app shares the Tailscale container's network namespace and is reached locally on port `3334` without requiring Tailscale Serve.
-
-The important rule is that `nginx-pihole` must **not** proxy LAN traffic back to a Tailscale `100.x` address. Doing that makes the local path depend on the Tailscale overlay even though DNS already resolved locally.
-
-## One-time shared Docker network
-
-Create the network before starting the Pi-hole stack:
+Create the shared network once:
 
 ```bash
-docker network inspect local-webapps >/dev/null 2>&1 ||
+docker network inspect local-webapps >/dev/null 2>&1 || \
     docker network create local-webapps
 ```
 
-`nginx-pihole` joins this network in `compose_example.yml`.
+For each application that should be reachable locally, load its `compose.local-webapps.yml` overlay. Nginx should proxy LAN traffic to the local Docker backend, not back to a Tailscale `100.x` address.
 
-For each application that should be reachable through Pi-hole while offline, also load that application's `compose.local-webapps.yml` overlay:
-
-```bash
-docker compose \
-    -f compose.yml \
-    -f compose.local-webapps.yml \
-    up -d
-```
-
-The overlay only adds the application's backend network namespace to `local-webapps`; it does not change Tailscale Serve or publish another host port.
-
-## Customize the examples
-
-Replace these example values before use:
-
-- `192.168.1.10` with the LAN IP of the Docker host
-- `example-tailnet.ts.net` with your Tailscale tailnet DNS suffix
-- certificate paths with the paths used by your deployment
-- local upstream container names if you changed a Compose `container_name`
-
-Example Pi-hole host entry:
-
-```text
-192.168.1.10 jellyfin.example-tailnet.ts.net
-```
-
-Example local Nginx upstream:
-
-```nginx
-set $local_backend "http://tailscale-jellyfin:8096";
-proxy_pass $local_backend;
-```
-
-The application shares the Tailscale sidecar's network namespace, so Jellyfin's port `8096` is reachable through the sidecar container on `local-webapps`. This path never uses the sidecar's Tailscale `100.x` address.
-
-The shared `00-docker-resolver.conf` uses Docker's embedded DNS and the per-service configs resolve backend container names at request time. A stopped optional service therefore returns a gateway error for that service instead of preventing all of `nginx-pihole` from starting.
-
-## Local backend map
-
-| Service | Local Docker upstream |
-|---|---|
-| Audiobookshelf | `tailscale-audiobookshelf:80` |
-| Dockge | `tailscale-dockge:5001` |
-| Flame | `tailscale-flame:5005` |
-| FreshRSS | `tailscale-freshrss:80` |
-| Immich | `tailscale-immich:2283` |
-| Jellyfin | `tailscale-jellyfin:8096` |
-| Navidrome | `tailscale-navidrome:4533` |
-| Jellyseerr | `tailscale-jellyseerr:5055` |
-| Karakeep | `tailscale-karakeep:3000` |
-| ntfy | `tailscale-ntfy:80` |
-| Obico | `tailscale-obico:3334` |
-| Owncast | `owncast-tailscale:8080` |
-| Transmission | `gluetun:9091` |
-| Mullvad Browser | `gluetun:3000` |
-| Vaultwarden | `tailscale-vaultwarden:80` |
-
-Transmission and Mullvad Browser share Gluetun's network namespace, so their LAN proxy target is `gluetun` rather than their Tailscale sidecars.
-
-Obico does not need a Tailscale Serve handler for the local path. Its web process listens on port `3334` in the same network namespace as `tailscale-obico`, so `nginx-pihole` can reach `tailscale-obico:3334` directly over `local-webapps`.
-
-## HTTPS certificates
-
-Nginx still uses the file-based Tailscale certificates already mounted from the service state directories. An Internet outage does not invalidate an existing certificate. Internet access is only required later when a certificate actually needs renewal.
-
-## IPv6
-
-Do not copy an ISP-delegated global IPv6 address into the local Pi-hole host overrides if offline LAN access is a requirement. That prefix can disappear or become unusable when the WAN is down.
-
-Use one of these instead:
-
-- LAN IPv4 only, which is the default in this example
-- a stable local ULA IPv6 prefix that remains routed with the WAN disconnected
-
-## Validation
-
-Check Pi-hole directly rather than relying on the Docker host's resolver, because the host may itself use Tailscale DNS:
+Validate Pi-hole directly:
 
 ```bash
 dig @192.168.1.10 jellyfin.example-tailnet.ts.net A +short
 ```
 
-It should return the LAN server IP, not a Tailscale `100.x` address.
-
-Then force the HTTPS request through the LAN IP to prove the proxy path is local:
+Then force the HTTPS request through the LAN IP:
 
 ```bash
 curl -k \
     --resolve jellyfin.example-tailnet.ts.net:443:192.168.1.10 \
     https://jellyfin.example-tailnet.ts.net/
 ```
-
-A real application response proves Nginx reached the local Docker backend. `502`, `503`, and `504` indicate the local backend path is not working.

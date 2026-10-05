@@ -1,0 +1,11 @@
+{
+  "ENABLE_GUI": false,
+  "FORCE_MAX_COMPRESSION": false,
+  "IMAGE_QUALITY": 20,
+  "USE_AVIF": true,
+  "USE_SPECULATIVE_CACHE": true,
+  "SPECULATIVE_CACHE_MAX_ENTRIES": 1000,
+  "CLEAR_HTTP_ERRORS": true,
+  "BLOCK_ADS": false,
+  "ENABLE_DEBUG": false
+}

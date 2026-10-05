@@ -1,0 +1,11 @@
+services:
+  pihole:
+    networks:
+      default: {}
+      pihole-proxy:
+        ipv4_address: 172.30.53.2
+
+networks:
+  pihole-proxy:
+    external: true
+    name: pihole-proxy

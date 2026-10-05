@@ -1,0 +1,5 @@
+services:
+  pihole:
+    ports:
+      - "${TAILSCALE_IP:?set TAILSCALE_IP}:53:53/tcp"
+      - "${TAILSCALE_IP:?set TAILSCALE_IP}:53:53/udp"

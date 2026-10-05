@@ -7,6 +7,12 @@ https://github.com/auanasgheps/snapraid-aio-script/tree/master
 APC UPS configuration
 https://youtu.be/MyXrlRUBqyg
 
+## Docker
+
+Pi-hole profile management, encrypted Quad9 upstream DNS, LAN/Tailscale DNS access, and optional profile-aware Arachnidium proxy examples are documented in:
+
+`docker/pihole/README.md`
+
 ## License
 This project is licensed under the [MIT License](https://github.com/dillacorn/deb-omv-dots/blob/main/LICENSE)
 
