@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import configparser
+import ipaddress
 import json
 import os
 import re
@@ -262,7 +263,7 @@ def profiles_menu():
         for p in M["pfiles"]():
             try: ps.append(M["load"](p,CAT))
             except BaseException: ps.append({"path":p,"name":p.stem,"proxy_enabled":False,"proxy_port":None})
-        items=[p["name"]+(f"   [proxy :{p['proxy_port']}]" if p.get("proxy_enabled") else "") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
+        items=[p["name"]+(f"   [proxy :{p['proxy_port']}]" if p.get("proxy_enabled") else "   [proxy off]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
         c=menu("Profiles",items,"Proxy-enabled profiles show their connection port beside the profile name.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
@@ -297,8 +298,11 @@ def save_proxy(path,enabled,port=None,docker_ip="",label=""):
     if enabled:
         if not str(port).isdigit() or not (1024 <= int(port) <= 65535):
             raise ValueError("Port must be between 1024 and 65535.")
-        if not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}",docker_ip):
-            raise ValueError("Docker IP must be an IPv4 address.")
+        try:
+            if ipaddress.ip_address(docker_ip).version != 4:
+                raise ValueError
+        except ValueError:
+            raise ValueError("Docker IP must be a valid IPv4 address.")
         for other in configured_proxies(path):
             if other["proxy_port"]==int(port): raise ValueError(f"Port {port} is already used by {other['name']}.")
             if other["proxy_ip"]==docker_ip: raise ValueError(f"Docker IP {docker_ip} is already used by {other['name']}.")
