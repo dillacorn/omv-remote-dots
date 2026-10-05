@@ -95,6 +95,54 @@ def profiles() -> list[dict]:
     return out
 
 
+def rfc1918_ipv4(value: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if ip.version != 4:
+        return False
+    return (
+        ip in ipaddress.ip_network("10.0.0.0/8")
+        or ip in ipaddress.ip_network("172.16.0.0/12")
+        or ip in ipaddress.ip_network("192.168.0.0/16")
+    )
+
+
+def direct_lan_networks() -> list[ipaddress.IPv4Network]:
+    networks = []
+    raw = run(["ip", "-4", "route", "show", "scope", "link"])
+    for line in raw.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        dev = ""
+        if "dev" in parts:
+            try:
+                dev = parts[parts.index("dev") + 1]
+            except (ValueError, IndexError):
+                dev = ""
+        if dev in {"lo", "tailscale0"} or dev.startswith(("docker", "br-", "veth")):
+            continue
+        try:
+            net = ipaddress.ip_network(parts[0], strict=False)
+        except ValueError:
+            continue
+        if isinstance(net, ipaddress.IPv4Network) and rfc1918_ipv4(str(net.network_address)):
+            networks.append(net)
+    return networks
+
+
+def is_direct_lan_ip(value: str, networks: list[ipaddress.IPv4Network] | None = None) -> bool:
+    if not rfc1918_ipv4(value):
+        return False
+    nets = direct_lan_networks() if networks is None else networks
+    if not nets:
+        return True
+    ip = ipaddress.ip_address(value)
+    return any(ip in net for net in nets)
+
+
 def neighbor_map() -> dict[str, str]:
     out: dict[str, str] = {}
     for line in run(["ip", "neigh", "show"]).splitlines():
@@ -117,6 +165,7 @@ def neighbor_map() -> dict[str, str]:
 def recent_lan_clients() -> list[dict]:
     found: dict[str, dict] = {}
     macs = neighbor_map()
+    local_networks = direct_lan_networks()
 
     if FTL_DB.is_file():
         try:
@@ -135,7 +184,7 @@ def recent_lan_clients() -> list[dict]:
                             ip = ipaddress.ip_address(value)
                         except ValueError:
                             continue
-                        if ip.version != 4 or not ip.is_private:
+                        if ip.version != 4 or not is_direct_lan_ip(value, local_networks):
                             continue
                         found[value] = {
                             "ip": value,
@@ -152,7 +201,7 @@ def recent_lan_clients() -> list[dict]:
             ip = ipaddress.ip_address(value)
         except ValueError:
             continue
-        if ip.version != 4 or not ip.is_private:
+        if ip.version != 4 or not is_direct_lan_ip(value, local_networks):
             continue
         found.setdefault(
             value,
