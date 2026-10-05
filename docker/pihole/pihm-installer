@@ -75,7 +75,11 @@ if [[ -n "$SCRIPT_SOURCE" && -f "$SCRIPT_SOURCE" ]]; then
 fi
 
 LOCAL_SOURCE=0
-if [[ -n "$SCRIPT_DIR" &&
+# "update" must always fetch the current remote files. Otherwise an installed
+# /docker/pihole/pihm-installer would simply copy the already-installed files
+# back over themselves and never update.
+if [[ "$ACTION" == "install" &&
+      -n "$SCRIPT_DIR" &&
       -f "$SCRIPT_DIR/pihole-profile-manager" &&
       -f "$SCRIPT_DIR/pihole-profile-tui" &&
       -f "$SCRIPT_DIR/profile-catalog.ini" &&
@@ -136,6 +140,6 @@ ln -sfn "$DEST/pihm-installer" "$BINDIR/pihm-installer"
 printf '\nInstalled successfully.\n'
 printf 'Run the TUI from anywhere with:\n\n'
 printf '  %s\n\n' "$COMMAND"
-printf 'Update later with:\n\n'
-printf '  pihm-installer update\n\n'
+printf 'Future updates are built into the TUI:\n\n'
+printf '  pihm -> Update pihm\n\n'
 printf 'Profile files remain in: %s/profiles.d\n' "$DEST"
