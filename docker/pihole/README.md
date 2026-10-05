@@ -57,7 +57,7 @@ Running `/docker/pihole/pihole-profile-manager` with no arguments opens the same
 
 Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, Enter selects or toggles, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
 
-The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale/proxy client IPs, apply profiles, rebuild Gravity, manage the daily timer, and show proxy connection guidance.
+The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT]` or `[proxy off]` beside every profile.
 
 On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/profiles.d/` without changing them.
 
@@ -147,8 +147,15 @@ tlds =
 [clients]
 entries =
     100.64.0.50 | laptop
-    172.30.53.101 | arachnidium-personal
+
+[proxy]
+enabled = true
+port = 18101
+docker_ip = 172.30.53.101
+label = arachnidium-personal
 ```
+
+The proxy port is the address you enter in a browser/Android proxy setting. The Docker IP is the fixed private source address Pi-hole uses to select this profile. When the profile is applied, `pihm` automatically assigns the configured proxy Docker IP to the Pi-hole group, so it does not need to be duplicated under `[clients]`.
 
 The manager converts allow/deny domains and TLDs into Pi-hole regex rules that also cover subdomains. It synchronizes its catalog lists and manager-owned rules/clients while leaving unrelated manual Pi-hole data alone.
 
@@ -201,6 +208,24 @@ Before relying on per-device groups over Tailscale, verify Pi-hole's query log s
 ## Profile-aware HTTP proxies
 
 Pi-hole chooses a profile from the DNS client's source IP. A proxy therefore needs a unique, stable Docker IP if different proxy endpoints should use different Pi-hole profiles.
+
+The TUI keeps the association visible. For example:
+
+```text
+Home Router                         [proxy :18101]
+Security++ Windows & Android        [proxy :18102]
+Guest                               [proxy off]
+```
+
+Inside a profile, open **Proxy endpoint**. `pihm` can allocate the next recommended pair automatically, starting at host port `18101` and Docker IP `172.30.53.101`. The **Proxy endpoints** screen then shows the hostname, LAN address, Tailscale address, port, Docker IP, and whether the matching Arachnidium container is running.
+
+CLI equivalents are also available:
+
+```bash
+pihm proxy list
+pihm proxy set "Home Router" --port 18101 --docker-ip 172.30.53.101
+pihm proxy disable "Home Router"
+```
 
 Create the private proxy network once:
 
