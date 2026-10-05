@@ -8,6 +8,14 @@ client -> Pi-hole profile/group -> dnsproxy -> Quad9 DoH
 
 That keeps blocking, allow/deny rules, client groups, and policy decisions local to Pi-hole while using Quad9 only for recursive DNS resolution over encrypted DoH.
 
+## Start here
+
+For the normal recommended setup, use [SETUP.md](SETUP.md).
+
+For the deeper IPv6, Tailscale, Docker, ASUS/BGW320, and troubleshooting details, use [NETWORKING.md](NETWORKING.md).
+
+Keep normal setup simple. The advanced networking guide exists so the main setup does not have to carry every edge case.
+
 ### Optional NextDNS upstream
 
 NextDNS remains supported as an optional upstream for users who want it. It is not the default and should not be configured as a parallel resolver beside Pi-hole.
