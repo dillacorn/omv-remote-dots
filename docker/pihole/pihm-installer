@@ -62,12 +62,21 @@ need python3
 need install
 need mktemp
 
-SCRIPT_DIR="$(
-  cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd
-)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+
+# When invoked as an actual file, allow installing from the checked-out/local
+# directory. When piped via "curl ... | bash", BASH_SOURCE is empty; never
+# mistake the current working directory for the installer source.
+if [[ -n "$SCRIPT_SOURCE" && -f "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(
+    cd -- "$(dirname -- "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd
+  )"
+fi
 
 LOCAL_SOURCE=0
-if [[ -f "$SCRIPT_DIR/pihole-profile-manager" &&
+if [[ -n "$SCRIPT_DIR" &&
+      -f "$SCRIPT_DIR/pihole-profile-manager" &&
       -f "$SCRIPT_DIR/pihole-profile-tui" &&
       -f "$SCRIPT_DIR/profile-catalog.ini" &&
       -f "$SCRIPT_DIR/profile.example.ini" &&
@@ -94,7 +103,7 @@ for f in "${FILES[@]}"; do
   if (( LOCAL_SOURCE )); then
     [[ -f "$SCRIPT_DIR/$f" ]] || {
       [[ "$f" == "pihm-installer" ]] || die "Missing local source file: $SCRIPT_DIR/$f"
-      cp -- "${BASH_SOURCE[0]}" "$stage/$f"
+      cp -- "$SCRIPT_SOURCE" "$stage/$f"
       continue
     }
     cp -- "$SCRIPT_DIR/$f" "$stage/$f"
