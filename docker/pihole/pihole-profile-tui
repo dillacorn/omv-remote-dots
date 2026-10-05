@@ -457,6 +457,38 @@ def proxy_screen():
         pos=c; show_text("Proxy connection",proxy_connection_text(ps[c]))
 
 
+def update_pihm():
+    candidates=[
+        Path("/usr/local/bin/pihm-installer"),
+        MANAGER.with_name("pihm-installer"),
+    ]
+    installer=next((p for p in candidates if p.is_file()),None)
+    if installer is None:
+        show_text(
+            "Update pihm",
+            "pihm-installer was not found. Re-run the one-time install command from the README.",
+        )
+        return
+
+    clear()
+    print(f"{BOLD}Update pihm{RESET}\n")
+    print("Fetching and installing the latest files from omv-remote-dots main...\n")
+    try:
+        subprocess.run([str(installer),"update"],check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"\n{RED}Update failed with status {e.returncode}.{RESET}")
+        pause()
+        return
+    except OSError as e:
+        print(f"\n{RED}Update failed:{RESET} {e}")
+        pause()
+        return
+
+    print(f"\n{GREEN}Update complete.{RESET}")
+    pause("Press any key to restart pihm...")
+    os.execv(sys.executable,[sys.executable,str(MANAGER)])
+
+
 def help_screen():
     show_text("Help",f"""Navigation
 
@@ -489,12 +521,13 @@ def main():
     if not sys.stdin.isatty() or not sys.stdout.isatty(): print("ERROR: interactive terminal required",file=sys.stderr); return 2
     M["PROFILES"].mkdir(parents=True,exist_ok=True)
     while True:
-        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / apply","Proxy endpoints     LAN + Tailscale connection info","Maintenance         Gravity / timer / import","Help","Quit"],"Arrow-key TUI inspired by smtty/Awtarchy navigation")
-        if c is None or c==4: clear(); return 0
+        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / apply","Proxy endpoints     LAN + Tailscale connection info","Maintenance         Gravity / timer / import","Update pihm         fetch latest from main","Help","Quit"],"Arrow-key TUI inspired by smtty/Awtarchy navigation")
+        if c is None or c==5: clear(); return 0
         if c==0: profiles_menu()
         elif c==1: proxy_screen()
         elif c==2: maintenance()
-        elif c==3: help_screen()
+        elif c==3: update_pihm()
+        elif c==4: help_screen()
 
 
 if __name__=="__main__": raise SystemExit(main())
