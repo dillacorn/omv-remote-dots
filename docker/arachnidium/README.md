@@ -49,6 +49,8 @@ docker compose -f compose_example.yml build --pull
 docker compose -f compose_example.yml up -d
 ```
 
+Set all three values in `.env`: the OMV LAN IP, OMV Tailscale IP, and OMV MagicDNS hostname. `PROXY_HOSTNAME` is the single address you can keep configured in the browser at home and away.
+
 Assign each proxy's private Docker IP to the Pi-hole profile it should use:
 
 ```bash
