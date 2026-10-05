@@ -12,7 +12,8 @@ The profile manager below keeps groups, lists, allow/deny rules, blocked TLDs, a
 
 Files:
 
-- `pihole-profile-manager` - management program
+- `pihole-profile-manager` - management program and CLI
+- `pihole-profile-tui` - arrow-key TUI for normal day-to-day management
 - `profile-catalog.ini` - maintained blocklist URLs
 - `profile.example.ini` - editable profile example
 - `/docker/pihole/profiles.d/*.ini` - live profile definitions
@@ -22,9 +23,30 @@ Install/update the manager into the live Pi-hole directory:
 ```bash
 cd /path/to/omv-remote-dots/docker/pihole
 install -m 0755 pihole-profile-manager /docker/pihole/pihole-profile-manager
+install -m 0755 pihole-profile-tui /docker/pihole/pihole-profile-tui
 install -m 0644 profile-catalog.ini /docker/pihole/profile-catalog.ini
 mkdir -p /docker/pihole/profiles.d
 ```
+
+### TUI
+
+Run the manager with no arguments:
+
+```bash
+/docker/pihole/pihole-profile-manager
+```
+
+It opens the TUI automatically. You can also launch it directly:
+
+```bash
+/docker/pihole/pihole-profile-tui
+```
+
+Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, Enter selects or toggles, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
+
+The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale/proxy client IPs, apply profiles, rebuild Gravity, manage the daily timer, and show proxy connection guidance.
+
+On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/profiles.d/` without changing them.
 
 Capture existing non-default Pi-hole groups as editable profiles:
 
@@ -206,7 +228,15 @@ Tailscale IP: 100.64.0.10:18101
 
 Both addresses terminate at the same proxy container, so they use the same Pi-hole profile.
 
-The easiest single address is the OMV MagicDNS hostname:
+The easiest single address is the OMV MagicDNS hostname. Put the real values in `/docker/arachnidium/.env`:
+
+```ini
+LAN_IP=192.168.1.10
+TAILSCALE_IP=100.64.0.10
+PROXY_HOSTNAME=omv.example-tailnet.ts.net
+```
+
+Then use the same browser proxy address everywhere:
 
 ```text
 omv.example-tailnet.ts.net:18101
