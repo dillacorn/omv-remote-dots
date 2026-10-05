@@ -29,6 +29,7 @@ BIND = os.environ.get("PIHM_WEB_BIND", "127.0.0.1")
 PORT = int(os.environ.get("PIHM_WEB_PORT", "8091"))
 USERNAME = os.environ.get("PIHM_WEB_USERNAME", "admin")
 PASSWORD = os.environ.get("PIHM_WEB_PASSWORD", "")
+ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
 CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 16 * 1024
 
@@ -295,6 +296,15 @@ def valid_address(value: str) -> bool:
     try:
         ipaddress.ip_address(value)
         return True
+    except ValueError:
+        return False
+
+
+def bind_is_loopback() -> bool:
+    if BIND.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(BIND).is_loopback
     except ValueError:
         return False
 
@@ -661,6 +671,8 @@ def check() -> int:
         problems.append(f"missing Pi-hole FTL database: {FTL_DB}")
     if not PASSWORD:
         problems.append("PIHM_WEB_PASSWORD is not set")
+    if not bind_is_loopback() and not ALLOW_REMOTE_BIND:
+        problems.append("non-loopback bind requires PIHM_WEB_ALLOW_REMOTE_BIND=1")
 
     if problems:
         for item in problems:
@@ -689,6 +701,10 @@ def main() -> int:
 
     if not MANAGER.is_file():
         print(f"ERROR: pihole-profile-manager not found: {MANAGER}", file=sys.stderr)
+        return 2
+
+    if not bind_is_loopback() and not ALLOW_REMOTE_BIND:
+        print("ERROR: refusing non-loopback bind without PIHM_WEB_ALLOW_REMOTE_BIND=1", file=sys.stderr)
         return 2
 
     server = ThreadingHTTPServer((BIND, PORT), Handler)
