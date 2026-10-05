@@ -243,18 +243,22 @@ For this design:
 
 The Pi-hole API/web password is a secret. Do not commit it, quote it into documentation, or leave it exposed in shared logs. Rotate it if it has been pasted into a chat, ticket, or public location.
 
-## Migration upstream
+## Upstream DNS policy
 
-The repository target is:
+The repository default and recommended design is:
 
 ```text
 client -> Pi-hole -> dnsproxy -> Quad9 DoH
 ```
 
-A live migration may temporarily use:
+Pi-hole remains the self-hosted filtering and per-client policy layer. `dnsproxy` provides encrypted upstream transport. Quad9 is the default recursive resolver.
+
+NextDNS remains supported as an optional upstream:
 
 ```text
-client -> Pi-hole -> dnsproxy -> NextDNS
+client -> Pi-hole -> dnsproxy -> NextDNS DoH
 ```
 
-Do not assume the live upstream has already been switched to Quad9. Verify the running Compose command before changing or removing NextDNS.
+Do not configure NextDNS and Quad9 as parallel client-side resolvers around Pi-hole because that creates a policy bypass path. Use exactly one upstream behind Pi-hole.
+
+A live host may differ from the repository default, especially during migrations. Always verify the running `dnsproxy` command before changing upstream DNS.
