@@ -1063,8 +1063,8 @@ pihm reads your Tailscale device list and lets you choose a device by name.
 You can also type its Tailscale name or full MagicDNS name.
 
 Example:
-  dillons-s24-1
-  dillons-s24-1.time-puffin.ts.net
+  phone
+  phone.example-tailnet.ts.net
 
 pihm automatically adds the device's Tailscale 100.x address.
 
