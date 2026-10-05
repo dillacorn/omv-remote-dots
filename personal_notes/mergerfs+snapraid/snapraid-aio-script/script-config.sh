@@ -167,7 +167,9 @@ DOCKER_MODE=1
 # SERVICES="syncthing kopia nextcloud $(docker container ls -q --filter name=immich*)"
 
 DOCKER_LOCAL=1
-SERVICES="immich_server immich_machine_learning immich_postgres immich_redis vaultwarden hbbs hbbr mullvad-browser transmission ntfy flame jellyseerr mariadb_jellyseerr karakeep-web-1 karakeep-meilisearch-1 karakeep-chrome-1 jellyfin freshrss mariadb_freshrss calibre minecraft-minecraft-1 donetick watchtower audiobookshelf dockge"
+# Only pause containers with read-write access to the SnapRAID-backed MergerFS pool.
+# Containers whose media mounts are read-only do not need to be paused.
+SERVICES="audiobookshelf brave calibre immich_server jellyfin mullvad-browser transmission"
 
 # Manage Docker containers running on a remote machine. To use this feature,
 # you must setup passwordless ssh access between snapRAID host and Docker host.
