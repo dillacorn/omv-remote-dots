@@ -271,7 +271,7 @@ def edit_description(path,p):
 def profile_editor(path):
     while True:
         p=M["load"](path,CAT)
-        proxy=f":{p['proxy_port']}  {p['proxy_ip']}" if p["proxy_enabled"] else "Disabled"
+        proxy=f":{p['proxy_port']}  {p['proxy_ip']} (configured)" if p["proxy_enabled"] else "Not configured"
         items=[f"Description          {p['description']}",f"Blocklists selected  {len(p['keys'])}",f"Allow domains        {len(p['allow'])}",f"Deny domains         {len(p['deny'])}",f"Blocked TLDs         {len(p['tlds'])}",f"Clients              {len(p['clients'])}",f"Proxy endpoint       {proxy}","Apply Pi-hole policy sync rules/clients","Apply + Gravity      sync + rebuild blocklists","Clone profile","View raw INI","Back"]
         sub="Profile-file edits save immediately. Pi-hole changes only on Apply."
         if p["proxy_enabled"]: sub+=f"  Proxy port: {p['proxy_port']}"
@@ -321,8 +321,8 @@ def profiles_menu():
         for p in M["pfiles"]():
             try: ps.append(M["load"](p,CAT))
             except BaseException: ps.append({"path":p,"name":p.stem,"proxy_enabled":False,"proxy_port":None})
-        items=[p["name"]+(f"   [proxy :{p['proxy_port']}]" if p.get("proxy_enabled") else "   [proxy off]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
-        c=menu("Profiles",items,"Proxy-enabled profiles show their connection port beside the profile name.",min(pos,len(items)-1))
+        items=[p["name"]+(f"   [proxy :{p['proxy_port']} configured]" if p.get("proxy_enabled") else "   [no proxy]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
+        c=menu("Profiles",items,"[no proxy] means this Pi-hole policy has no Arachnidium endpoint configured yet.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
         if c<len(ps): profile_editor(ps[c]["path"])
@@ -436,10 +436,10 @@ def proxy_editor(path):
         if not p["proxy_enabled"]:
             port,ip=next_proxy_slot(path)
             c=menu("Proxy endpoint",[
-                f"Enable recommended   :{port} / {ip}",
+                f"Configure recommended :{port} / {ip}",
                 "Configure manually",
                 "Back",
-            ],f"{p['name']} currently has no proxy port.")
+            ],f"{p['name']} is a Pi-hole policy only until a proxy endpoint is configured and deployed.")
             if c is None or c==2: return
             if c==0:
                 try: save_proxy(path,True,port,ip,f"arachnidium-{M['slug'](p['name'])}")
@@ -515,10 +515,10 @@ def proxy_screen():
             except BaseException:
                 continue
         items=[
-            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}" if p["proxy_enabled"] else "[off - Enter to configure]")
+            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}  configured" if p["proxy_enabled"] else "[no proxy - Enter to configure]")
             for p in ps
         ]+["Back"]
-        c=menu("Proxy endpoints",items,"Every profile is listed. Enter an [off] profile to configure its proxy endpoint.",min(pos,len(items)-1))
+        c=menu("Proxy endpoints",items,"Every Pi-hole profile is listed. [no proxy] means no Arachnidium endpoint is configured yet.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
         p=ps[c]
@@ -578,7 +578,7 @@ Recommended workflow
   3. Apply Pi-hole policy after changing rules, clients, or proxy settings.
   4. Use Apply + Gravity when selected blocklists changed and need downloading.
   5. Open Proxy endpoint inside a profile to assign its port and Docker IP.
-  6. A proxy marked [off] is only a Pi-hole profile until you configure and deploy a proxy for it.
+  6. A profile marked [no proxy] is only a Pi-hole policy until you configure and deploy an Arachnidium endpoint for it.
 
 Files
 
