@@ -1,0 +1,32 @@
+# Optional direct LAN IPv6 DNS endpoint for Pi-hole.
+#
+# Required environment variables:
+#   LAN_INTERFACE      e.g. enp3s0
+#   LAN_IPV6_SUBNET    e.g. 2001:db8:1234:5678::/64
+#   LAN_IPV6_GATEWAY   e.g. 2001:db8:1234:5678::1
+#   PIHOLE_IPV6        e.g. 2001:db8:1234:5678::53
+#
+# This overlay intentionally does not publish IPv6 port 53 through the
+# IPv4-only default bridge. Pi-hole receives a direct IPv6 macvlan address
+# on the physical LAN instead.
+
+services:
+  pihole:
+    networks:
+      default: {}
+      pihole_ipv6:
+        ipv6_address: "${PIHOLE_IPV6:?set PIHOLE_IPV6}"
+
+networks:
+  pihole_ipv6:
+    name: pihole_ipv6
+    driver: macvlan
+    driver_opts:
+      parent: "${LAN_INTERFACE:?set LAN_INTERFACE}"
+      macvlan_mode: bridge
+    enable_ipv4: false
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: "${LAN_IPV6_SUBNET:?set LAN_IPV6_SUBNET}"
+          gateway: "${LAN_IPV6_GATEWAY:?set LAN_IPV6_GATEWAY}"
