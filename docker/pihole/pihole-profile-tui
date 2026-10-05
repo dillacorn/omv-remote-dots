@@ -271,7 +271,7 @@ def edit_description(path,p):
 def profile_editor(path):
     while True:
         p=M["load"](path,CAT)
-        proxy=f":{p['proxy_port']}  {p['proxy_ip']} (configured)" if p["proxy_enabled"] else "Not configured"
+        proxy=f":{p['proxy_port']}  {p['proxy_ip']} (reserved; not necessarily running)" if p["proxy_enabled"] else "No endpoint reserved"
         items=[
             f"Description          {p['description']}",
             f"Blocklists selected  {len(p['keys'])}",
@@ -279,14 +279,14 @@ def profile_editor(path):
             f"Deny domains         {len(p['deny'])}",
             f"Blocked TLDs         {len(p['tlds'])}",
             f"Clients              {len(p['clients'])}",
-            f"Arachnidium proxy    {proxy}",
+            f"Arachnidium endpoint {proxy}",
             "Sync to Pi-hole       rules / clients / list assignments",
             "Sync + refresh lists  download latest blocklists",
             "Clone profile",
             "View raw INI",
             "Back",
         ]
-        sub="Profile edits save to the INI immediately. Use Sync to write them into live Pi-hole."
+        sub="Reserving an endpoint does NOT start Arachnidium or force this profile through a proxy."
         if p["proxy_enabled"]: sub+=f"  Proxy port: {p['proxy_port']}"
         c=menu(f"Profile: {p['name']}",items,sub)
         if c is None or c==11: return
@@ -334,8 +334,8 @@ def profiles_menu():
         for p in M["pfiles"]():
             try: ps.append(M["load"](p,CAT))
             except BaseException: ps.append({"path":p,"name":p.stem,"proxy_enabled":False,"proxy_port":None})
-        items=[p["name"]+(f"   [proxy :{p['proxy_port']} configured]" if p.get("proxy_enabled") else "   [no proxy]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
-        c=menu("Profiles",items,"[no proxy] means this Pi-hole policy has no Arachnidium endpoint configured yet.",min(pos,len(items)-1))
+        items=[p["name"]+(f"   [Arachnidium endpoint :{p['proxy_port']} reserved]" if p.get("proxy_enabled") else "   [no Arachnidium endpoint]") for p in ps]+["+ Create new profile","Import current Pi-hole groups","Back"]
+        c=menu("Profiles",items,"An endpoint is only a reserved port/IP mapping. It does not mean Arachnidium is running or forced on clients.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
         if c<len(ps): profile_editor(ps[c]["path"])
@@ -418,9 +418,9 @@ def proxy_connection_text(p):
     running=command_output(["docker","inspect","-f","{{.State.Running}}",label])
     state="running" if running=="true" else "not running / not deployed"
     return f"""Profile:       {p['name']}
-Proxy port:    {port}
+Reserved port: {port}
 Docker IP:     {p['proxy_ip']}
-Container:     {label} ({state})
+Arachnidium:   {label} ({state})
 
 Use the same hostname in the browser at home and away:
   {host}:{port}
@@ -435,11 +435,13 @@ Android / browser manual proxy:
   Hostname: {host}
   Port:     {port}
 
-The port selects the profile. The proxy Docker IP is automatically assigned
-to this Pi-hole group when you Apply the profile.
+The reserved port selects this Pi-hole profile only when a client/browser
+actually connects to it. Reserving the endpoint does not force any device
+through Arachnidium and does not start a container.
 
-If the container is not running, the endpoint is only configured in pihm;
-Arachnidium still needs to be deployed for the port to accept connections.
+If the container is not running, the endpoint cannot accept connections.
+A device that never configures this proxy continues using normal networking
+with Pi-hole DNS filtering only.
 """
 
 
@@ -449,10 +451,10 @@ def proxy_editor(path):
         if not p["proxy_enabled"]:
             port,ip=next_proxy_slot(path)
             c=menu("Arachnidium proxy",[
-                f"Configure recommended :{port} / {ip}",
-                "Configure manually",
+                f"Reserve endpoint       :{port} / {ip}",
+                "Reserve manually",
                 "Back",
-            ],f"{p['name']} has no Arachnidium endpoint. Configuring one reserves a port/IP; it does not deploy the container.")
+            ],f"{p['name']} has no Arachnidium endpoint. Reserving one only records port/IP metadata; Arachnidium remains OFF until a container is deployed and a client uses that proxy.")
             if c is None or c==2: return
             if c==0:
                 try: save_proxy(path,True,port,ip,f"arachnidium-{M['slug'](p['name'])}")
@@ -468,13 +470,13 @@ def proxy_editor(path):
 
         label=p["proxy_label"] or f"arachnidium-{M['slug'](p['name'])}"
         c=menu("Arachnidium proxy",[
-            f"Connection info      :{p['proxy_port']}",
+            f"Endpoint info         :{p['proxy_port']}",
             f"Change port          {p['proxy_port']}",
             f"Change Docker IP     {p['proxy_ip']}",
             f"Container name       {label} (advanced)",
-            "Disable proxy",
+            "Remove reserved endpoint",
             "Back",
-        ],f"{p['name']} -> port {p['proxy_port']} -> {p['proxy_ip']}  (configuration only until deployed)")
+        ],f"{p['name']} -> reserved port {p['proxy_port']} -> {p['proxy_ip']}  | container may still be OFF")
         if c is None or c==5: return
         if c==0: show_text("Proxy connection",proxy_connection_text(p))
         elif c==1:
@@ -528,15 +530,15 @@ def proxy_screen():
             except BaseException:
                 continue
         items=[
-            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}  configured" if p["proxy_enabled"] else "[no Arachnidium proxy]")
+            f"{p['name']:<34} " + (f":{p['proxy_port']}   {p['proxy_ip']}  reserved" if p["proxy_enabled"] else "[no endpoint reserved]")
             for p in ps
         ]+["Back"]
-        c=menu("Arachnidium proxies",items,"A configured port/IP is only the planned endpoint until its Arachnidium container is deployed.",min(pos,len(items)-1))
+        c=menu("Arachnidium endpoints",items,"Reserved = port/IP mapping only. Running requires an Arachnidium container; use is opt-in per client/browser.",min(pos,len(items)-1))
         if c is None or c==len(items)-1: return
         pos=c
         p=ps[c]
         if p["proxy_enabled"]:
-            x=menu("Arachnidium proxy",["Connection info","Edit / disable configuration","Back"],f"{p['name']} -> :{p['proxy_port']}")
+            x=menu("Arachnidium endpoint",["Endpoint / runtime info","Edit / remove reservation","Back"],f"{p['name']} -> :{p['proxy_port']}")
             if x==0: show_text("Proxy connection",proxy_connection_text(p))
             elif x==1: proxy_editor(p["path"])
         else:
@@ -595,9 +597,9 @@ How this works
 Arachnidium
 
   A Pi-hole profile does not need a proxy.
-  Configuring an Arachnidium proxy reserves a host port and private Docker IP for that profile.
-  "Configured" does NOT mean the Arachnidium container is deployed/running.
-  A client uses Arachnidium only when that client/browser is explicitly configured to use the proxy.
+  Reserving an Arachnidium endpoint stores a host port and private Docker IP for that profile.
+  Reservation does NOT deploy/start Arachnidium and does NOT proxy the whole profile.
+  A client uses Arachnidium only when that client/browser explicitly uses the reserved host:port.
   Turning the client proxy setting back to None/Off bypasses Arachnidium while Pi-hole DNS filtering still works.
 
 Files
