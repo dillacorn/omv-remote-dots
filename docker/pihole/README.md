@@ -1,10 +1,38 @@
 # Pi-hole
 
-This stack uses Pi-hole as the filtering/policy layer and `dnsproxy` only as an encrypted upstream transport to Quad9.
+This stack uses Pi-hole as the self-hosted filtering/policy layer and `dnsproxy` only as encrypted upstream transport. **Quad9 DoH is the default and recommended upstream.**
 
 ```text
 client -> Pi-hole profile/group -> dnsproxy -> Quad9 DoH
 ```
+
+That keeps blocking, allow/deny rules, client groups, and policy decisions local to Pi-hole while using Quad9 only for recursive DNS resolution over encrypted DoH.
+
+### Optional NextDNS upstream
+
+NextDNS remains supported as an optional upstream for users who want it. It is not the default and should not be configured as a parallel resolver beside Pi-hole.
+
+Use the optional overlay:
+
+```bash
+export NEXTDNS_CONFIG_ID='your-nextdns-config-id'
+
+docker compose \
+  -f compose.yml \
+  -f compose.nextdns-upstream.yml \
+  up -d --no-deps dnsproxy
+```
+
+The resulting path is:
+
+```text
+client -> Pi-hole profile/group -> dnsproxy -> NextDNS DoH
+```
+
+Pi-hole still performs the local profile/blocking policy. NextDNS is only the encrypted recursive upstream in that mode.
+
+To return to the recommended Quad9 default, recreate `dnsproxy` from the base Compose file without the NextDNS overlay.
+
 
 The profile manager below keeps groups, lists, allow/deny rules, blocked TLDs, and client assignments editable as normal INI files instead of hand-editing `gravity.db`.
 
