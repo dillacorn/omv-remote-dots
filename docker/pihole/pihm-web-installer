@@ -82,8 +82,7 @@ EOF
     chmod 0600 "$ENV_FILE"
     printf 'Created %s\n' "$ENV_FILE"
     printf 'Initial username: admin\n'
-    printf 'Initial password: %s\n' "$password"
-    printf 'Store that password now.\n'
+    printf 'Password stored in %s (mode 0600).\n' "$ENV_FILE"
 fi
 
 install -m 0755 "$stage/pihm-web" "$HOME/pihm-web"
@@ -122,5 +121,6 @@ PIHM_WEB_PASSWORD="$(
 printf '\npihm-web installed.\n'
 printf 'Local backend: http://127.0.0.1:8091\n'
 printf 'Status: pihm-web-installer status\n'
+printf 'Credentials: sudo cat %s\n' "$ENV_FILE"
 printf '\nThe service is localhost-only by default.\n'
 printf 'Use SSH port forwarding or Tailscale Serve for remote browser access.\n'
