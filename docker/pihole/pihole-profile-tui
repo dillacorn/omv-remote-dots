@@ -674,12 +674,28 @@ def edit_description(path,p):
                 return
 
 
+def rename_profile_ui(path):
+    p=M["load"](path,CAT)
+    name=prompt("Rename profile",p["name"])
+    if name is None or not name.strip() or name.strip()==p["name"]:
+        return path
+    name=name.strip()
+    if not confirm(f"Rename profile?\n\n{p['name']} -> {name}\n\nThe live Pi-hole group will be renamed too when it exists."):
+        return path
+    try:
+        return M["rename_profile"](p["name"],name,CAT)
+    except BaseException as e:
+        show_text("Rename profile",f"ERROR: {e}")
+        return path
+
+
 def profile_editor(path):
     while True:
         p=M["load"](path,CAT)
         proxy=f":{p['proxy_port']}  {p['proxy_ip']} (reserved; not necessarily running)" if p["proxy_enabled"] else "No endpoint reserved"
         default_state="Yes - unassigned clients use this policy" if p.get("is_default") else "No"
         items=[
+            f"Rename profile       {p['name']}",
             f"Description          {p['description']}",
             f"Blocklists selected  {len(p['keys'])}",
             f"Allow domains        {len(p['allow'])}",
@@ -697,26 +713,28 @@ def profile_editor(path):
         sub="Default fallback mirrors this profile into Pi-hole's built-in Default group for otherwise-unassigned clients."
         if p["proxy_enabled"]: sub+=f"  Proxy port: {p['proxy_port']}"
         c=menu(f"Profile: {p['name']}",items,sub)
-        if c is None or c==12: return
+        if c is None or c==13: return
         if c==0:
+            path=rename_profile_ui(path)
+        elif c==1:
             edit_description(path,p)
-        elif c==1: edit_lists(path)
-        elif c==2: edit_values(path,"allow","domains","Allowed domains")
-        elif c==3: edit_values(path,"deny","domains","Denied domains")
-        elif c==4: edit_values(path,"deny","tlds","Blocked TLDs")
-        elif c==5: edit_clients(path)
-        elif c==6:
+        elif c==2: edit_lists(path)
+        elif c==3: edit_values(path,"allow","domains","Allowed domains")
+        elif c==4: edit_values(path,"deny","domains","Denied domains")
+        elif c==5: edit_values(path,"deny","tlds","Blocked TLDs")
+        elif c==6: edit_clients(path)
+        elif c==7:
             if p.get("is_default"):
                 show_text("Default fallback",f"{p['name']} is already the fallback policy for otherwise-unassigned clients.")
             elif confirm(f"Use {p['name']} as the Default fallback?\n\nThis will mirror its blocklists and allow/deny rules into Pi-hole's built-in Default group."):
                 external("Set Default fallback",lambda:M["set_default_profile"](p["name"],CAT))
-        elif c==7: proxy_editor(path)
-        elif c==8: apply(path,False)
-        elif c==9: apply(path,True)
-        elif c==10:
+        elif c==8: proxy_editor(path)
+        elif c==9: apply(path,False)
+        elif c==10: apply(path,True)
+        elif c==11:
             out=clone(path)
             if out: path=out
-        elif c==11: show_text("Raw profile",path.read_text(encoding="utf-8"),str(path))
+        elif c==12: show_text("Raw profile",path.read_text(encoding="utf-8"),str(path))
 
 
 def new_profile():
