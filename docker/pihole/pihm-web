@@ -1093,7 +1093,7 @@ def find_local_tail_device(value: str) -> dict:
     return matches[0]
 
 
-def link_local_tail_device(profile_name: str, device: dict) -> list[str]:
+def link_local_tail_device(profile_name: str, device: dict, sync: bool = True) -> list[str]:
     p = profile_by_name(profile_name)
     candidates = recent_lan_clients()
     lan_ip, _ = auto_lan_for_tail_device(device, candidates)
@@ -1107,7 +1107,8 @@ def link_local_tail_device(profile_name: str, device: dict) -> list[str]:
         current = [(a, old_label) for a, old_label in current if a != address]
         current.append((address, label))
     write_profile_clients(p, current)
-    manager("apply", profile_name)
+    if sync:
+        manager("apply", profile_name)
     return [address for address, _ in entries]
 
 
@@ -1266,6 +1267,7 @@ def theme_css(name: str) -> str:
         f"--accent:{theme['foreground']};"
         f"--danger:{theme['critical']};"
         f"--control:{theme['hover']};"
+        f"--hover:{theme['focus']};"
         "}"
     )
 
@@ -1888,13 +1890,19 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, o
         if item["ip"] in assigned_addresses:
             continue
         if item.get("source") == "local":
+            lan_match, lan_reason = auto_lan_for_tail_device(item, lan_clients)
             action = f"""<form method="post" action="/profile/link-local-device" class="inline">
               <input type="hidden" name="csrf" value="{h(CSRF)}">
               <input type="hidden" name="device" value="{h(item["ip"])}">
               <select name="profile" data-profile-select>{profile_options()}</select>
-              <button type="submit">Link + sync</button>
+              <button type="submit" name="mode" value="save">Link</button>
+              <button type="submit" name="mode" value="sync">Link + sync</button>
             </form>"""
             state = "Online" if item.get("online") else "Offline"
+            if lan_match:
+                state += f" · LAN {lan_match} ({lan_reason})"
+            else:
+                state += " · no confident LAN match"
         else:
             verified = item["ip"] in recent_dns_addresses
             if verified:
@@ -1920,6 +1928,16 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, o
         )
 
     manual_add = f"""
+      <details>
+        <summary>Find by Tailscale / MagicDNS name</summary>
+        <form method="post" action="/profile/link-local-device-name" class="toolbar" style="margin-top:8px">
+          <input type="hidden" name="csrf" value="{h(CSRF)}">
+          <input name="device" placeholder="Hostname, MagicDNS name, or Tailscale IPv4" required>
+          <select name="profile" data-profile-select>{profile_options()}</select>
+          <button type="submit" name="mode" value="save">Link</button>
+          <button type="submit" name="mode" value="sync">Link + sync</button>
+        </form>
+      </details>
       <details>
         <summary>Manual address</summary>
         <form method="post" action="/assign" class="toolbar" style="margin-top:8px">
@@ -2353,26 +2371,16 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
 
-            if path == "/profile/link-local-device":
+            if path in {"/profile/link-local-device", "/profile/link-local-device-name"}:
                 profile_name = form_one(data, "profile").strip()
                 if not valid_profile(profile_name):
                     fail("profile not found")
                 device = find_local_tail_device(form_one(data, "device"))
-                linked = link_local_tail_device(profile_name, device)
+                sync_now = form_one(data, "mode") != "save"
+                linked = link_local_tail_device(profile_name, device, sync=sync_now)
+                verb = "Linked + synced" if sync_now else "Linked"
                 self.redirect(
-                    f"Linked {device['name']}: " + ", ".join(linked),
-                    target=profile_return(profile_name),
-                )
-                return
-
-            if path == "/profile/link-local-device-name":
-                profile_name = form_one(data, "profile").strip()
-                if not valid_profile(profile_name):
-                    fail("profile not found")
-                device = find_local_tail_device(form_one(data, "device"))
-                linked = link_local_tail_device(profile_name, device)
-                self.redirect(
-                    f"Linked {device['name']}: " + ", ".join(linked),
+                    f"{verb} {device['name']}: " + ", ".join(linked),
                     target=profile_return(profile_name),
                 )
                 return
