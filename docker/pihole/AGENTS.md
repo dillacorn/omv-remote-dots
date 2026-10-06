@@ -188,6 +188,6 @@ For LAN client assignments, display a discovered MAC address when available, but
 
 ### pihm-web authentication
 
-By default, pihm-web must reuse the existing Pi-hole web password instead of generating a second credential. The host-side service may read `FTLCONF_webserver_api_password` from the already-running Pi-hole container at startup. Do not print, duplicate, or commit that password.
+By default, pihm-web must reuse the existing Pi-hole web password instead of generating a second credential. Validate the supplied password against Pi-hole v6 through its local `/api/auth` endpoint and close the temporary API session immediately. Do not read the password from `FTLCONF_webserver_api_password`, and do not print, duplicate, or commit it.
 
 A separate pihm-web password should exist only as an explicit opt-in custom-auth mode.
