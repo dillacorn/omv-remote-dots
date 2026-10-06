@@ -1,46 +1,82 @@
 # pihm-web
 
-`pihm-web` is an optional browser interface for frequent Pi-hole profile/client management.
+`pihm-web` is the optional browser interface for the same Pi-hole profiles managed by `pihm`.
 
-It is separate from the existing `pihm` TUI. The TUI remains the dependable SSH/admin interface.
+Pi-hole does not require pihm. pihm does not require pihm-web. The TUI remains fully usable over SSH when the web service is not installed.
 
-## First version
+## What it manages
 
-The first web version intentionally stays small:
+The web interface supports normal pihm management:
 
-- shows profiles and the current Default fallback;
-- shows assigned client addresses;
-- discovers recent LAN IPv4 clients;
-- displays the LAN MAC address when the server neighbor table knows it;
-- discovers Tailscale clients;
-- assigns/removes client addresses;
-- changes the Default fallback;
-- syncs a profile to Pi-hole;
-- shows whether the active encrypted upstream appears to be Quad9 or NextDNS.
+- profile creation and cloning;
+- profile descriptions;
+- blocklist selection and extra blocklist URLs;
+- allow/deny domains and blocked TLDs;
+- current Default fallback;
+- explicit LAN/Tailscale client assignments;
+- recent DNS clients actually seen by Pi-hole;
+- LAN IPv4 and MAC discovery;
+- router DHCP-reservation guidance;
+- local and optional secondary-tailnet device discovery;
+- Arachnidium endpoint metadata;
+- normal sync and sync + blocklist refresh;
+- blocklist refresh and daily-update timer controls;
+- import of existing Pi-hole groups.
 
-Writes still go through the existing `pihole-profile-manager`, so pihm keeps ownership of database backups, profile rules, and DNS reload behavior.
+Writes continue to use the existing pihm manager for live Pi-hole changes, backups, reloads, and group ownership.
 
-## Install from the testing branch
+## Install and manage
+
+Install pihm first:
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/dillacorn/omv-remote-dots/feat/pihm-web/docker/pihole/pihm-web-installer \
-  -o /tmp/pihm-web-installer
-
-PIHM_WEB_REF=feat/pihm-web bash /tmp/pihm-web-installer
+curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/pihole/pihm-installer | bash
 ```
 
-By default, pihm-web reuses the existing Pi-hole web password. It validates the password against Pi-hole v6 through the local `/api/auth` endpoint, immediately closes the temporary API session, and does not generate or store a second password.
+Then launch:
 
-The pihm-web settings file is:
+```bash
+pihm
+```
+
+Use:
+
+```text
+Web interface
+-> Install web interface
+```
+
+The same menu handles update, status, restart, access instructions, and removal.
+
+Direct installer commands remain available:
+
+```bash
+pihm-web-installer install
+pihm-web-installer update
+pihm-web-installer status
+pihm-web-installer uninstall
+```
+
+## Authentication
+
+By default, pihm-web reuses the existing Pi-hole web password.
+
+It validates the supplied password against Pi-hole v6 through the local `/api/auth` endpoint, immediately closes the temporary API session, and does not generate or store a duplicate Pi-hole password.
+
+Default login:
+
+```text
+username: admin
+password: existing Pi-hole web password
+```
+
+The settings file is:
 
 ```text
 /etc/pihm-web.env
 ```
 
-It stores bind/port/username/auth-source settings, not a duplicate Pi-hole password.
-
-The backend listens only on:
+The service listens only on:
 
 ```text
 127.0.0.1:8091
@@ -48,67 +84,108 @@ The backend listens only on:
 
 by default.
 
-## Test locally over SSH
+## Access over SSH
 
 From another machine:
 
 ```bash
-ssh -L 8091:127.0.0.1:8091 root@your-omv-host
+ssh -o ExitOnForwardFailure=yes -N \
+  -L 8091:127.0.0.1:8091 \
+  root@your-omv-host
 ```
 
-Then open:
+Leave that terminal running, then open:
 
 ```text
 http://127.0.0.1:8091
 ```
 
-Use username `admin` and the same password you already use for the Pi-hole web interface.
+If the SSH server disables TCP forwarding, enable only the minimum forwarding needed instead of exposing pihm-web directly.
 
-## Optional Tailscale Serve
+## Active DNS clients
 
-Tailscale Serve can expose a localhost web service to the tailnet over HTTPS without making it public.
+The profile cards distinguish two different counts:
 
-Before changing Serve configuration, inspect what is already active:
+- `DNS clients (24h)`: unique source IP addresses that actually queried Pi-hole during the recent window;
+- `explicit client addresses`: addresses saved directly in that profile INI.
 
-```bash
-tailscale serve status
-```
+For the Default fallback profile, otherwise-unassigned DNS source addresses count toward that fallback because they receive its mirrored policy.
 
-For branch testing, use a dedicated tailnet HTTPS port so an existing root Serve route is not replaced:
-
-```bash
-tailscale serve --bg --https=8444 8091
-```
-
-Then use the HTTPS URL reported by `tailscale serve status`.
-
-Do not use Tailscale Funnel for pihm-web.
-
-If the OMV node already has Tailscale Serve configuration, review it first instead of replacing it blindly.
+This is a source-address count, not a perfect physical-device count. A router can represent downstream IPv6 clients, and one physical device can legitimately appear once by LAN IPv4 and once by Tailscale IPv4.
 
 ## LAN addresses and router reservations
 
-For a permanent LAN profile assignment, reserve the client's LAN IPv4 address to its MAC address on the router.
+For a permanent LAN assignment, reserve the client's LAN IPv4 to its MAC address on the router.
 
-pihm-web displays the MAC when it is visible in the OMV neighbor table, but Pi-hole policy continues to use the stable LAN IPv4 address as the local client identity.
+pihm-web displays the MAC when it is visible in the OMV neighbor table, but Pi-hole policy continues to use the stable LAN IPv4 as the local identity.
 
-A typical device can therefore have:
+A device can therefore have:
 
 ```text
 LAN IPv4       -> profile
 Tailscale IPv4 -> same profile
 ```
 
-The router reservation keeps the LAN IPv4 stable.
+## Multiple tailnets
+
+The OMV host stays logged into its normal/local tailnet.
+
+Additional tailnets are optional read-only discovery sources. Do not run multiple `tailscaled` instances merely to list devices.
+
+For each secondary tailnet:
+
+1. In that tailnet's Tailscale admin console, create an OAuth client under Trust credentials.
+2. Grant only **Devices > Core: Read**.
+3. Copy the tailnet ID from the tailnet General page.
+4. In pihm-web, add a secondary tailnet with:
+   - a display name;
+   - tailnet ID;
+   - OAuth client ID;
+   - OAuth client secret.
+
+pihm-web validates the credentials before saving them.
+
+Secondary-tailnet credentials are stored only on the OMV host in:
+
+```text
+/var/lib/pihm-web/tailnets.json
+```
+
+with mode `0600`. Client secrets are never displayed again by the web interface.
+
+Adding a secondary tailnet provides **discovery only**. It does not automatically give those devices network access to Pi-hole.
+
+For a user who remains in another tailnet, share the OMV/Pi-hole Tailscale machine to that user, then verify the remote device can reach Pi-hole and that Pi-hole logs the device's real `100.x` source address before relying on per-device profiles.
+
+An alternative is to invite that user into the same tailnet instead of using machine sharing.
+
+## Optional Tailscale Serve
+
+Tailscale Serve can expose the localhost web service to the tailnet over HTTPS without making it public.
+
+Inspect existing Serve configuration first:
+
+```bash
+tailscale serve status
+```
+
+For a dedicated test port:
+
+```bash
+tailscale serve --bg --https=8444 8091
+```
+
+Do not use Tailscale Funnel for pihm-web.
 
 ## Security
 
-pihm-web performs privileged profile changes through the existing pihm manager, so the service is intentionally localhost-only by default and requires HTTP Basic authentication.
+pihm-web performs privileged profile changes through the existing pihm manager.
 
-Do not bind it publicly.
+- Keep the backend localhost-only by default.
+- Do not expose it publicly.
+- Do not use Tailscale Funnel.
+- Do not put `/var/run/docker.sock` in a web-facing container.
+- Keep secondary-tailnet OAuth credentials read-only and root-only.
+- Prefer an SSH tunnel or authenticated HTTPS front end such as Tailscale Serve.
 
-Do not expose it with Tailscale Funnel.
-
-The testing branch does not automatically modify nginx, firewall rules, Tailscale Serve, or router configuration.
-
-The backend also refuses a non-loopback bind unless `PIHM_WEB_ALLOW_REMOTE_BIND=1` is explicitly set. Prefer leaving it on localhost and putting an authenticated/encrypted reverse proxy such as Tailscale Serve in front of it.
+The backend refuses a non-loopback bind unless `PIHM_WEB_ALLOW_REMOTE_BIND=1` is explicitly set.
