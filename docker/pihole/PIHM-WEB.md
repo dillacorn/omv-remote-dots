@@ -8,20 +8,23 @@ Pi-hole does not require pihm. pihm does not require pihm-web. The TUI remains f
 
 The web interface supports normal pihm management:
 
-- profile creation and cloning;
+- profile creation, rename, and cloning;
 - profile descriptions;
 - blocklist selection and extra blocklist URLs;
 - allow/deny domains and blocked TLDs;
 - current Default fallback;
-- explicit LAN/Tailscale client assignments;
+- explicit LAN/Tailscale client assignments, edits, and removal;
+- local Tailscale device linking with confident LAN-address pairing;
 - recent DNS clients actually seen by Pi-hole;
 - LAN IPv4 and MAC discovery;
 - router DHCP-reservation guidance;
 - local and optional secondary-tailnet device discovery;
-- Arachnidium endpoint metadata;
+- Arachnidium endpoint metadata and runtime/connection information;
 - normal sync and sync + blocklist refresh;
 - blocklist refresh and daily-update timer controls;
-- import of existing Pi-hole groups.
+- import of existing Pi-hole groups;
+- pihm update from the browser;
+- browser-local Awtarchy-style themes.
 
 Writes continue to use the existing pihm manager for live Pi-hole changes, backups, reloads, and group ownership.
 
@@ -56,6 +59,26 @@ pihm-web-installer update
 pihm-web-installer status
 pihm-web-installer uninstall
 ```
+
+## Themes
+
+The theme selector is available on the dashboard and profile editor.
+
+Current palettes match the Awtarchy theme families:
+
+- Carbon Night;
+- Catppuccin Frappé;
+- Crimson Red;
+- Electric Blue;
+- Gruvbox;
+- Iron Forge;
+- Obsidian Night;
+- Pink;
+- Pip-Boy.
+
+Iron Forge is the default.
+
+The selected theme is stored only in the browser's `pihm_theme` cookie. It does not change Awtarchy, Pi-hole, pihm profiles, or server configuration.
 
 ## Authentication
 
