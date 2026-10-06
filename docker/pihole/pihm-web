@@ -2154,7 +2154,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 
     def require_auth(self) -> bool:
         if auth_ok(self.headers.get("Authorization")):
@@ -2193,11 +2193,18 @@ class Handler(BaseHTTPRequestHandler):
         error = q.get("error", ["0"])[0] == "1"
         theme = self.current_theme()
         if parsed.path in {"/", "/index.html"}:
-            self.send_html(render(message, error, theme))
+            open_modal = q.get("open", [""])[0][:120]
+            self.send_html(render(message, error, theme, open_modal))
             return
         if parsed.path == "/profile":
             name = q.get("name", [""])[0]
-            self.send_html(render_profile_editor(name, message, error, theme))
+            if not valid_profile(name):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", profile_return(name))
+            self.secure_headers()
+            self.end_headers()
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -2279,7 +2286,7 @@ class Handler(BaseHTTPRequestHandler):
                 if preset:
                     args += ["--preset", preset]
                 manager(*args)
-                self.redirect(f"Profile {name} created", target=f"/profile?name={quote(name)}")
+                self.redirect(f"Profile {name} created", target=profile_return(name))
                 return
 
             if path == "/profile/rename":
@@ -2292,7 +2299,7 @@ class Handler(BaseHTTPRequestHandler):
                 manager("rename", old_name, new_name)
                 self.redirect(
                     f"Profile renamed to {new_name}",
-                    target=f"/profile?name={quote(new_name)}",
+                    target=profile_return(new_name),
                 )
                 return
 
@@ -2304,7 +2311,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     fail("new profile name is required")
                 manager("new", name, "--clone", source)
-                self.redirect(f"Profile {name} created", target=f"/profile?name={quote(name)}")
+                self.redirect(f"Profile {name} created", target=profile_return(name))
                 return
 
             if path == "/profile/save":
@@ -2321,7 +2328,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.redirect(
                     f"{profile_name} saved; sync when ready",
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2342,7 +2349,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.redirect(
                     f"{profile_name} description restored from Pi-hole",
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2354,7 +2361,7 @@ class Handler(BaseHTTPRequestHandler):
                 linked = link_local_tail_device(profile_name, device)
                 self.redirect(
                     f"Linked {device['name']}: " + ", ".join(linked),
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2366,7 +2373,7 @@ class Handler(BaseHTTPRequestHandler):
                 linked = link_local_tail_device(profile_name, device)
                 self.redirect(
                     f"Linked {device['name']}: " + ", ".join(linked),
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2378,7 +2385,7 @@ class Handler(BaseHTTPRequestHandler):
                 edit_saved_client(profile_name, old_address, new_address, label)
                 self.redirect(
                     f"{profile_name} client saved; sync when ready",
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2388,7 +2395,7 @@ class Handler(BaseHTTPRequestHandler):
                 delete_saved_client(profile_name, address)
                 self.redirect(
                     f"{address} removed from saved {profile_name}; sync when ready",
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2404,7 +2411,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.redirect(
                     f"{profile_name} endpoint settings saved",
-                    target=f"/profile?name={quote(profile_name)}",
+                    target=profile_return(profile_name),
                 )
                 return
 
@@ -2413,9 +2420,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not valid_profile(profile):
                     fail("profile not found")
                 manager("apply", profile, "--gravity")
+                target = safe_return_to(form_one(data, "return_to")) if form_one(data, "return_to") else profile_return(profile)
                 self.redirect(
                     f"{profile} synced and blocklists refreshed",
-                    target=f"/profile?name={quote(profile)}",
+                    target=target,
                 )
                 return
 
@@ -2483,7 +2491,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not valid_profile(profile):
                     fail("profile not found")
                 manager("default", profile)
-                self.redirect(f"Default fallback set to {profile}")
+                target = safe_return_to(form_one(data, "return_to")) if form_one(data, "return_to") else "/"
+                self.redirect(f"Default fallback set to {profile}", target=target)
                 return
 
             if path == "/sync":
@@ -2491,7 +2500,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not valid_profile(profile):
                     fail("profile not found")
                 manager("apply", profile)
-                self.redirect(f"{profile} synced to Pi-hole")
+                target = safe_return_to(form_one(data, "return_to")) if form_one(data, "return_to") else "/"
+                self.redirect(f"{profile} synced to Pi-hole", target=target)
                 return
 
             self.send_error(HTTPStatus.NOT_FOUND)
