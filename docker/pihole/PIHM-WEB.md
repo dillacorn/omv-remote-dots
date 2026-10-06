@@ -36,7 +36,7 @@ Each profile card exposes:
 
 - `Edit` for the floating profile editor;
 - `Devices N` for saved devices tied to that profile;
-- `Recent N` for source addresses that actually queried Pi-hole using that live policy in the rolling previous 24 hours;
+- `Active N` for source addresses that queried Pi-hole using that live policy within the previous hour; opening it also shows the rolling 24-hour history;
 - `Sync`;
 - `Make default` when the profile is not the fallback.
 
@@ -145,7 +145,7 @@ If the SSH server disables TCP forwarding, enable only the minimum forwarding ne
 
 The profile cards distinguish two different counts:
 
-- `DNS sources seen (last 24h)`: unique source IP addresses that actually queried Pi-hole during the rolling previous 24 hours;
+- `Active N`: source IP addresses that queried Pi-hole using that live policy within the previous hour; the activity popup also shows unique sources from the rolling previous 24 hours;
 - `explicit client addresses`: addresses saved directly in that profile INI.
 
 For the Default fallback profile, otherwise-unassigned DNS source addresses count toward that fallback because they receive its mirrored policy.
