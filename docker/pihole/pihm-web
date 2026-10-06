@@ -41,6 +41,8 @@ ACTIVE_CLIENT_WINDOW = max(300, int(os.environ.get("PIHM_WEB_ACTIVE_CLIENT_WINDO
 ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
 CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 16 * 1024
+SECONDARY_TAILNET_CACHE: dict[str, tuple[float, list[dict]]] = {}
+SECONDARY_TAILNET_CACHE_SECONDS = 60
 
 
 def fail(message: str) -> None:
@@ -589,6 +591,21 @@ def secondary_tailnet_devices(entry: dict) -> list[dict]:
     return sorted(out, key=lambda item: item["name"].casefold())
 
 
+def cached_secondary_tailnet_devices(entry: dict) -> list[dict]:
+    key = "|".join((entry["label"], entry["tailnet"], entry["client_id"]))
+    cached = SECONDARY_TAILNET_CACHE.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < SECONDARY_TAILNET_CACHE_SECONDS:
+        return cached[1]
+    devices = secondary_tailnet_devices(entry)
+    SECONDARY_TAILNET_CACHE[key] = (now, devices)
+    return devices
+
+
+def clear_secondary_tailnet_cache() -> None:
+    SECONDARY_TAILNET_CACHE.clear()
+
+
 def all_tailscale_devices() -> tuple[list[dict], list[dict]]:
     devices = []
     for item in tailscale_devices():
@@ -602,7 +619,7 @@ def all_tailscale_devices() -> tuple[list[dict], list[dict]]:
     states = []
     for entry in load_secondary_tailnets():
         try:
-            remote = secondary_tailnet_devices(entry)
+            remote = cached_secondary_tailnet_devices(entry)
             devices.extend({**item, "online": False, "source": "api"} for item in remote)
             states.append({
                 "label": entry["label"],
@@ -1219,7 +1236,14 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
   {('<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>ID</th><th>Pi-hole group</th><th>Clients</th><th>Lists</th><th>Rules</th></tr></thead><tbody>' + ''.join(group_rows) + '</tbody></table></div>') if group_rows else ''}
 
   <h2>Secondary tailnets</h2>
-  <div class="status">Optional read-only device discovery for other tailnets. Use a Tailscale OAuth client with Devices/Core Read permission.</div>
+  <div class="status">Optional read-only device discovery for other tailnets.</div>
+  <details class="card" style="margin-top:12px">
+    <summary>Add another tailnet</summary>
+    <div class="hint" style="margin-top:8px">
+      In that tailnet's Tailscale admin console: Trust credentials → Credential → OAuth → grant Devices/Core Read.
+      Copy the client ID and secret. Copy the Tailnet ID from the General page, then enter them below.
+    </div>
+  </details>
   {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet ID</th><th>Status</th><th></th></tr></thead><tbody>' + ''.join(tailnet_rows) + '</tbody></table></div>') if tailnet_rows else '<div class="empty">No secondary tailnets configured.</div>'}
   <div class="card" style="margin-top:12px">
     <form method="post" action="/tailnet/add">
@@ -1629,9 +1653,13 @@ class Handler(BaseHTTPRequestHandler):
                     "client_id": client_id,
                     "client_secret": client_secret,
                 }
-                secondary_tailnet_devices(entry)
+                devices = secondary_tailnet_devices(entry)
                 rows.append(entry)
                 save_secondary_tailnets(rows)
+                clear_secondary_tailnet_cache()
+                SECONDARY_TAILNET_CACHE[
+                    "|".join((entry["label"], entry["tailnet"], entry["client_id"]))
+                ] = (time.monotonic(), devices)
                 self.redirect(f"Secondary tailnet {label} added")
                 return
 
@@ -1639,6 +1667,7 @@ class Handler(BaseHTTPRequestHandler):
                 label = form_one(data, "label").strip()
                 rows = [row for row in load_secondary_tailnets() if row["label"] != label]
                 save_secondary_tailnets(rows)
+                clear_secondary_tailnet_cache()
                 self.redirect(f"Secondary tailnet {label} removed")
                 return
 
