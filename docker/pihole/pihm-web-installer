@@ -64,8 +64,8 @@ mkdir -p "$HOME" "$BINDIR"
 stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 
-curl -fsSL "$RAW_BASE/pihm-web" -o "$stage/pihm-web"
-curl -fsSL "$RAW_BASE/pihm-web-installer" -o "$stage/pihm-web-installer"
+curl -fsSL -H 'Cache-Control: no-cache' "$RAW_BASE/pihm-web" -o "$stage/pihm-web"
+curl -fsSL -H 'Cache-Control: no-cache' "$RAW_BASE/pihm-web-installer" -o "$stage/pihm-web-installer"
 
 python3 -m py_compile "$stage/pihm-web"
 bash -n "$stage/pihm-web-installer"
