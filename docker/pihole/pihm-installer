@@ -14,12 +14,18 @@
 set -euo pipefail
 
 REPO="${PIHM_REPO:-dillacorn/omv-remote-dots}"
-REF="${PIHM_REF:-main}"
 DEST="${PIHM_HOME:-/docker/pihole}"
 BINDIR="${PIHM_BINDIR:-/usr/local/bin}"
 COMMAND="${PIHM_COMMAND:-pihm}"
-RAW_BASE="https://raw.githubusercontent.com/${REPO}/${REF}/docker/pihole"
+SOURCE_REF_FILE="$DEST/.pihm-source-ref"
 ACTION="${1:-install}"
+
+REF="${PIHM_REF:-}"
+if [[ -z "$REF" && -f "$SOURCE_REF_FILE" ]]; then
+  REF="$(cat "$SOURCE_REF_FILE")"
+fi
+REF="${REF:-main}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${REF}/docker/pihole"
 
 FILES=(
   pihole-profile-manager
@@ -62,7 +68,8 @@ if [[ "$ACTION" == "uninstall" ]]; then
     "$DEST/profile-catalog.ini" \
     "$DEST/profile.example.ini" \
     "$DEST/pihm-installer" \
-    "$DEST/pihm-web-installer"
+    "$DEST/pihm-web-installer" \
+    "$SOURCE_REF_FILE"
 
   printf 'Removed pihm program files and command links.\n'
   printf 'Preserved Pi-hole data, gravity.db, profiles.d, backups, and Compose files.\n'
@@ -150,8 +157,10 @@ install -m 0755 "$stage/pihm-web-installer" "$DEST/pihm-web-installer"
 ln -sfn "$DEST/pihole-profile-manager" "$BINDIR/$COMMAND"
 ln -sfn "$DEST/pihm-installer" "$BINDIR/pihm-installer"
 ln -sfn "$DEST/pihm-web-installer" "$BINDIR/pihm-web-installer"
+printf '%s\n' "$REF" >"$SOURCE_REF_FILE"
 
 printf '\nInstalled successfully.\n'
+printf 'Source ref: %s\n' "$REF"
 printf 'Run the TUI from anywhere with:\n\n'
 printf '  %s\n\n' "$COMMAND"
 printf 'Future updates are built into the TUI:\n\n'
