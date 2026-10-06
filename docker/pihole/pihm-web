@@ -681,21 +681,49 @@ def recent_dns_clients() -> list[dict]:
     return sorted(out, key=lambda item: (-item["last_seen"], item["ip"]))
 
 
+def live_client_group_rules() -> list[tuple[str, str]]:
+    if not GRAVITY_DB.is_file():
+        return []
+    try:
+        db = sqlite3.connect(f"file:{GRAVITY_DB}?mode=ro", uri=True)
+        rows = db.execute(
+            'SELECT c.ip,g.name FROM client c '
+            'JOIN client_by_group x ON x.client_id=c.id '
+            'JOIN "group" g ON g.id=x.group_id '
+            'ORDER BY c.id,g.id'
+        ).fetchall()
+        db.close()
+    except Exception:
+        return []
+    return [(str(row[0] or "").strip(), str(row[1] or "").strip()) for row in rows]
+
+
 def profile_activity(ps: list[dict]) -> tuple[dict[str, int], list[dict]]:
     counts = {p["name"]: 0 for p in ps}
+    known_profiles = set(counts)
     default_name = next((p["name"] for p in ps if p["default"]), "")
+    rules = live_client_group_rules()
     rows = []
+
     for item in recent_dns_clients():
-        matched = ""
-        for p in ps:
-            if any(address_matches_client(address, item["ip"]) for address, _ in p["clients"]):
-                matched = p["name"]
-                break
-        if not matched:
-            matched = default_name or "Pi-hole Default"
-        if matched in counts:
-            counts[matched] += 1
-        rows.append({**item, "profile": matched})
+        groups = []
+        for address, group_name in rules:
+            if address_matches_client(address, item["ip"]) and group_name not in groups:
+                groups.append(group_name)
+
+        non_default = [name for name in groups if name and name != "Default"]
+        if non_default:
+            effective = " + ".join(non_default)
+            for name in non_default:
+                if name in known_profiles:
+                    counts[name] += 1
+        else:
+            effective = default_name or "Pi-hole Default"
+            if effective in counts:
+                counts[effective] += 1
+
+        rows.append({**item, "profile": effective})
+
     return counts, rows
 
 
