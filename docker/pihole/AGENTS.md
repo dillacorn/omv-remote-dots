@@ -180,6 +180,17 @@ The web interface should cover normal pihm/TUI management so browser users are n
 
 Shared operations that change live Pi-hole identity/state, such as profile rename, should live in `pihole-profile-manager` and be called by both TUI and web. Web mutations should reuse pihm/pihole-profile-manager operations so database backups, profile ownership, Default fallback behavior, and Pi-hole reload behavior stay centralized.
 
+Keep the browser UI compact:
+
+- the main page is a dashboard, not a long stacked admin document;
+- profile cards show only high-value state and compact actions;
+- profile editing, device lists, recent activity, device discovery, maintenance, tailnets, creation, and help open as bordered modal overlays instead of separate detail pages;
+- device/discovery/profile lists should have search/filter controls when they can grow;
+- use rectangular controls and panels; do not reintroduce rounded-corner styling;
+- `Devices N` means saved devices grouped from explicit identities;
+- `Recent N` means DNS source addresses actually seen using that live policy in the rolling previous 24 hours;
+- help content should teach common workflows step by step rather than merely describe features.
+
 The web backend is localhost-only by default. Do not expose it publicly or enable Tailscale Funnel. Any Tailscale Serve integration must be opt-in and must inspect existing Serve configuration before changing it.
 
 Do not put the Docker socket inside a pihm-web container. The initial implementation runs on the OMV host and reuses the existing manager.
