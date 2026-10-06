@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import urllib.error
@@ -43,6 +44,118 @@ CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 256 * 1024
 SECONDARY_TAILNET_CACHE: dict[str, tuple[float, list[dict]]] = {}
 SECONDARY_TAILNET_CACHE_SECONDS = 60
+
+THEMES = {
+    "carbon_night": {
+        "label": "Carbon Night",
+        "background": "#353535",
+        "foreground": "#d0d0d0",
+        "hover": "#404040",
+        "focus": "#4a4a4a",
+        "active": "#2b2b2b",
+        "urgent": "#ff5555",
+        "critical": "#ff5555",
+        "muted": "#5c5c5c",
+        "mode": "dark",
+    },
+    "catppuccin-frappe": {
+        "label": "Catppuccin Frappé",
+        "background": "#303446",
+        "foreground": "#c6d0f5",
+        "hover": "#414559",
+        "focus": "#535970",
+        "active": "#383c4d",
+        "urgent": "#e78284",
+        "critical": "#ef9f76",
+        "muted": "#a5adce",
+        "mode": "dark",
+    },
+    "crimson_red": {
+        "label": "Crimson Red",
+        "background": "#1e1e2e",
+        "foreground": "#f38ba8",
+        "hover": "#352630",
+        "focus": "#5a3442",
+        "active": "#292330",
+        "urgent": "#f38ba8",
+        "critical": "#f38ba8",
+        "muted": "#9f8994",
+        "mode": "dark",
+    },
+    "electric_blue": {
+        "label": "Electric Blue",
+        "background": "#1e1e2e",
+        "foreground": "#89b4fa",
+        "hover": "#293448",
+        "focus": "#34445e",
+        "active": "#252938",
+        "urgent": "#f38ba8",
+        "critical": "#fab387",
+        "muted": "#8993a8",
+        "mode": "dark",
+    },
+    "gruvbox": {
+        "label": "Gruvbox",
+        "background": "#282828",
+        "foreground": "#ebdbb2",
+        "hover": "#4a423c",
+        "focus": "#665c4e",
+        "active": "#3c3836",
+        "urgent": "#b16286",
+        "critical": "#cc241d",
+        "muted": "#a89984",
+        "mode": "dark",
+    },
+    "iron_forge": {
+        "label": "Iron Forge",
+        "background": "#0f1113",
+        "foreground": "#bcd2d2",
+        "hover": "#1f2328",
+        "focus": "#242a32",
+        "active": "#0d0f12",
+        "urgent": "#a31717",
+        "critical": "#a31717",
+        "muted": "#6a7b86",
+        "mode": "dark",
+    },
+    "obsidian_night": {
+        "label": "Obsidian Night",
+        "background": "#0f0f0f",
+        "foreground": "#cdd6f4",
+        "hover": "#1e1e2e",
+        "focus": "#313244",
+        "active": "#1a1a1a",
+        "urgent": "#ff5555",
+        "critical": "#ff5555",
+        "muted": "#4b4b4b",
+        "mode": "dark",
+    },
+    "pink": {
+        "label": "Pink",
+        "background": "#d297a1",
+        "foreground": "#2e2e2e",
+        "hover": "#b77f91",
+        "focus": "#c0afc0",
+        "active": "#c0afc0",
+        "urgent": "#b04155",
+        "critical": "#b04155",
+        "muted": "#7a7a7a",
+        "mode": "light",
+    },
+    "pipboy": {
+        "label": "Pip-Boy",
+        "background": "#050805",
+        "foreground": "#a4ff47",
+        "hover": "#1f301f",
+        "focus": "#1b281b",
+        "active": "#101810",
+        "urgent": "#263826",
+        "critical": "#3c1b1b",
+        "muted": "#2a3d2a",
+        "mode": "dark",
+    },
+}
+DEFAULT_THEME = "iron_forge"
 
 
 def fail(message: str) -> None:
@@ -917,6 +1030,50 @@ def bind_is_loopback() -> bool:
         return False
 
 
+def theme_css(name: str) -> str:
+    theme = THEMES.get(name, THEMES[DEFAULT_THEME])
+    return (
+        ":root {"
+        f"color-scheme:{theme['mode']};"
+        f"--bg:{theme['background']};"
+        f"--panel:{theme['active']};"
+        f"--line:{theme['focus']};"
+        f"--text:{theme['foreground']};"
+        f"--muted:{theme['muted']};"
+        f"--accent:{theme['foreground']};"
+        f"--danger:{theme['critical']};"
+        f"--control:{theme['hover']};"
+        "}"
+    )
+
+
+def theme_form(current: str, return_to: str) -> str:
+    options = []
+    for key, theme in THEMES.items():
+        selected = " selected" if key == current else ""
+        options.append(
+            f'<option value="{h(key)}"{selected}>{h(theme["label"])}</option>'
+        )
+    return (
+        '<form method="post" action="/theme" class="inline">'
+        f'<input type="hidden" name="csrf" value="{h(CSRF)}">'
+        f'<input type="hidden" name="return_to" value="{h(return_to)}">'
+        f'<select name="theme">{"".join(options)}</select>'
+        '<button type="submit">Theme</button>'
+        '</form>'
+    )
+
+
+def safe_return_to(value: str) -> str:
+    value = value.strip()
+    if not value.startswith("/") or value.startswith("//"):
+        return "/"
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc or parsed.path not in {"/", "/profile"}:
+        return "/"
+    return value
+
+
 def h(value) -> str:
     return html.escape(str(value), quote=True)
 
@@ -975,7 +1132,7 @@ def action_form(action: str, fields: dict[str, str], label: str, select_profile:
     )
 
 
-def render(message: str = "", error: bool = False) -> str:
+def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -> str:
     ps = profiles()
     macs = neighbor_map()
     assigned = []
@@ -1127,6 +1284,7 @@ def render(message: str = "", error: bool = False) -> str:
     ]
     default_name = next((p["name"] for p in ps if p["default"]), "Not configured")
     gravity_timer = timer_state()
+    theme_picker = theme_form(theme, "/")
     notice = ""
     if message:
         cls = "notice error" if error else "notice"
@@ -1139,11 +1297,7 @@ def render(message: str = "", error: bool = False) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>pihm-web</title>
 <style>
-:root {{
-  color-scheme: dark;
-  --bg:#111417; --panel:#1a1f24; --line:#303840; --text:#eef2f5;
-  --muted:#9da7b0; --accent:#60e6e6; --danger:#ff8c8c;
-}}
+{theme_css(theme)}
 * {{ box-sizing:border-box; }}
 body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }}
 main {{ max-width:1200px; margin:0 auto; padding:24px; }}
@@ -1166,7 +1320,7 @@ th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line)
 th {{ color:var(--muted); font-weight:600; background:var(--panel); }}
 tr:last-child td {{ border-bottom:0; }}
 form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
-select,button,input,.button {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:7px 9px; }}
+select,button,input,.button {{ background:var(--control); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 9px; }}
 input {{ min-width:180px; }}
 button,.button {{ cursor:pointer; text-decoration:none; display:inline-block; }}
 button:hover,.button:hover {{ border-color:var(--accent); }}
@@ -1182,9 +1336,12 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
       <h1>pihm-web</h1>
       <div class="status">Pi-hole profile manager</div>
     </div>
-    <div class="status">
-      Default: <strong>{h(default_name)}</strong><br>
-      Upstream: <strong>{h(upstream_text())}</strong>
+    <div>
+      <div class="status">
+        Default: <strong>{h(default_name)}</strong><br>
+        Upstream: <strong>{h(upstream_text())}</strong>
+      </div>
+      <div class="actions">{theme_picker}</div>
     </div>
   </div>
 
@@ -1268,7 +1425,7 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
 </html>"""
 
 
-def render_profile_editor(name: str, message: str = "", error: bool = False) -> str:
+def render_profile_editor(name: str, message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -> str:
     p = profile_by_name(name)
     catalog = catalog_entries()
     selected = set(p["keys"])
@@ -1306,6 +1463,7 @@ def render_profile_editor(name: str, message: str = "", error: bool = False) -> 
     proxy_checked = " checked" if p["proxy_enabled"] else ""
     live_description = live_group_description(p["name"])
     suggested_port, suggested_ip = next_proxy_slot(p["name"])
+    theme_picker = theme_form(theme, f"/profile?name={quote(p['name'])}")
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1314,7 +1472,7 @@ def render_profile_editor(name: str, message: str = "", error: bool = False) -> 
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{h(p["name"])} - pihm-web</title>
 <style>
-:root {{ color-scheme:dark; --bg:#111417; --panel:#1a1f24; --line:#303840; --text:#eef2f5; --muted:#9da7b0; --accent:#60e6e6; --danger:#ff8c8c; }}
+{theme_css(theme)}
 * {{ box-sizing:border-box; }}
 body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }}
 main {{ max-width:1000px; margin:0 auto; padding:24px; }}
@@ -1328,7 +1486,7 @@ a {{ color:var(--text); }}
 .tag {{ font-size:11px; border:1px solid var(--accent); color:var(--accent); padding:2px 6px; border-radius:999px; }}
 .notice {{ margin:18px 0; padding:12px; border:1px solid var(--accent); border-radius:8px; }}
 .notice.error {{ border-color:var(--danger); color:var(--danger); }}
-input,select,textarea,button,.button {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:8px 10px; }}
+input,select,textarea,button,.button {{ background:var(--control); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }}
 input[type=checkbox] {{ min-width:0; }}
 textarea {{ width:100%; min-height:110px; resize:vertical; }}
 button,.button {{ cursor:pointer; text-decoration:none; display:inline-block; }}
@@ -1345,7 +1503,10 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
 </head>
 <body>
 <main>
-  <a href="/">← Back</a>
+  <div class="actions" style="justify-content:space-between">
+    <a href="/">← Back</a>
+    {theme_picker}
+  </div>
   <h1>{h(p["name"])}</h1>
   <div class="muted">Edit saved profile settings, then sync when ready.</div>
   {notice}
@@ -1450,6 +1611,19 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
+    def current_theme(self) -> str:
+        raw = self.headers.get("Cookie", "")
+        if not raw:
+            return DEFAULT_THEME
+        try:
+            cookie = SimpleCookie()
+            cookie.load(raw)
+            item = cookie.get("pihm_theme")
+            value = item.value if item is not None else ""
+        except Exception:
+            return DEFAULT_THEME
+        return value if value in THEMES else DEFAULT_THEME
+
     def secure_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -1492,12 +1666,13 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(parsed.query)
         message = q.get("message", [""])[0][:500]
         error = q.get("error", ["0"])[0] == "1"
+        theme = self.current_theme()
         if parsed.path in {"/", "/index.html"}:
-            self.send_html(render(message, error))
+            self.send_html(render(message, error, theme))
             return
         if parsed.path == "/profile":
             name = q.get("name", [""])[0]
-            self.send_html(render_profile_editor(name, message, error))
+            self.send_html(render_profile_editor(name, message, error, theme))
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -1521,6 +1696,21 @@ class Handler(BaseHTTPRequestHandler):
                 fail("invalid CSRF token")
 
             path = urlparse(self.path).path
+
+            if path == "/theme":
+                theme = form_one(data, "theme").strip()
+                if theme not in THEMES:
+                    fail("invalid theme")
+                target = safe_return_to(form_one(data, "return_to"))
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", target)
+                self.send_header(
+                    "Set-Cookie",
+                    f"pihm_theme={theme}; Path=/; Max-Age=31536000; SameSite=Strict; HttpOnly",
+                )
+                self.secure_headers()
+                self.end_headers()
+                return
 
             if path == "/maintenance/gravity":
                 manager("gravity")
