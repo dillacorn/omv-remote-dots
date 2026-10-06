@@ -30,7 +30,7 @@ curl -fsSL \
 PIHM_WEB_REF=feat/pihm-web bash /tmp/pihm-web-installer
 ```
 
-By default, pihm-web reuses the existing Pi-hole web password. It reads the configured Pi-hole password from the running Pi-hole container at startup, so no second password is generated or stored.
+By default, pihm-web reuses the existing Pi-hole web password. It validates the password against Pi-hole v6 through the local `/api/auth` endpoint, immediately closes the temporary API session, and does not generate or store a second password.
 
 The pihm-web settings file is:
 
