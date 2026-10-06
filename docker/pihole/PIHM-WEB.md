@@ -28,6 +28,22 @@ The web interface supports normal pihm management:
 
 Writes continue to use the existing pihm manager for live Pi-hole changes, backups, reloads, and group ownership.
 
+## Dashboard
+
+The main page stays compact.
+
+Each profile card exposes:
+
+- `Edit` for the floating profile editor;
+- `Devices N` for saved devices tied to that profile;
+- `Recent N` for source addresses that actually queried Pi-hole using that live policy in the rolling previous 24 hours;
+- `Sync`;
+- `Make default` when the profile is not the fallback.
+
+Device discovery, all-device inspection, profile creation, maintenance, secondary tailnets, and help open in floating modal overlays instead of separate pages. Lists that can grow include local search/filter fields.
+
+The interface uses rectangular panels and controls. Theme selection changes the palette only.
+
 ## Install and manage
 
 Install pihm first:
