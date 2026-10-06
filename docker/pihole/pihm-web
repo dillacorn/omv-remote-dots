@@ -1278,8 +1278,8 @@ def theme_form(current: str, return_to: str) -> str:
         '<form method="post" action="/theme" class="inline">'
         f'<input type="hidden" name="csrf" value="{h(CSRF)}">'
         f'<input type="hidden" name="return_to" value="{h(return_to)}">'
-        f'<select name="theme">{"".join(options)}</select>'
-        '<button type="submit">Theme</button>'
+        f'<label>Theme <select name="theme">{"".join(options)}</select></label>'
+        '<button type="submit">Apply</button>'
         '</form>'
     )
 
