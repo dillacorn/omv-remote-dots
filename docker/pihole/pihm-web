@@ -832,12 +832,13 @@ def render(message: str = "", error: bool = False) -> str:
             "/default", {"profile": p["name"]}, "Make default"
         )
         sync = action_form("/sync", {"profile": p["name"]}, "Sync")
+        edit = f'<a class="button" href="/profile?name={quote(p["name"])}">Edit</a>'
         profile_cards.append(
             f"""<div class="card">
               <div class="card-title">{h(p["name"])} {default}</div>
               <div class="muted">{p["lists"]} blocklists · {activity_counts.get(p["name"], 0)} DNS clients (24h)</div>
               <div class="hint">{len(p["clients"])} explicit client addresses</div>
-              <div class="actions">{set_default}{sync}</div>
+              <div class="actions">{edit}{set_default}{sync}</div>
             </div>"""
         )
 
@@ -976,10 +977,10 @@ th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line)
 th {{ color:var(--muted); font-weight:600; background:var(--panel); }}
 tr:last-child td {{ border-bottom:0; }}
 form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
-select,button,input {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:7px 9px; }}
+select,button,input,.button {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:7px 9px; }}
 input {{ min-width:180px; }}
-button {{ cursor:pointer; }}
-button:hover {{ border-color:var(--accent); }}
+button,.button {{ cursor:pointer; text-decoration:none; display:inline-block; }}
+button:hover,.button:hover {{ border-color:var(--accent); }}
 code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
 .empty {{ color:var(--muted); padding:14px; border:1px dashed var(--line); border-radius:10px; }}
 footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
@@ -1002,6 +1003,21 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
 
   <h2>Profiles</h2>
   <div class="grid">{''.join(profile_cards) or '<div class="empty">No profiles found.</div>'}</div>
+  <div class="card" style="margin-top:12px">
+    <form method="post" action="/profile/create">
+      <input type="hidden" name="csrf" value="{h(CSRF)}">
+      <div class="actions">
+        <input name="name" placeholder="New profile name" required>
+        <select name="preset">
+          <option value="">Blank</option>
+          <option value="normal">Normal</option>
+          <option value="strict">Strict</option>
+          <option value="parental">Parental</option>
+        </select>
+        <button type="submit">Create profile</button>
+      </div>
+    </form>
+  </div>
 
   <h2>Assigned clients</h2>
   {('<div class="table-wrap"><table><thead><tr><th>Client</th><th>Address</th><th>MAC</th><th>Profile</th><th></th></tr></thead><tbody>' + ''.join(assigned_rows) + '</tbody></table></div>') if assigned_rows else '<div class="empty">No assigned clients.</div>'}
@@ -1043,6 +1059,167 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
 </html>"""
 
 
+def render_profile_editor(name: str, message: str = "", error: bool = False) -> str:
+    p = profile_by_name(name)
+    catalog = catalog_entries()
+    selected = set(p["keys"])
+    checks = []
+    for key, comment in catalog.items():
+        checked = " checked" if key in selected else ""
+        checks.append(
+            f'<label class="check"><input type="checkbox" name="keys" value="{h(key)}"{checked}> '
+            f'<strong>{h(key)}</strong> <span class="muted">{h(comment)}</span></label>'
+        )
+
+    clients = []
+    for address, label in p["clients"]:
+        remove = action_form("/unassign", {"address": address}, "Remove")
+        clients.append(
+            f"""<tr>
+              <td>{h(label or "—")}</td>
+              <td><code>{h(address)}</code></td>
+              <td>{remove}</td>
+            </tr>"""
+        )
+
+    default_action = (
+        '<span class="tag">DEFAULT</span>'
+        if p["default"]
+        else action_form("/default", {"profile": p["name"]}, "Make default")
+    )
+    sync = action_form("/sync", {"profile": p["name"]}, "Sync")
+    gravity = action_form("/sync-gravity", {"profile": p["name"]}, "Sync + refresh lists")
+    notice = ""
+    if message:
+        cls = "notice error" if error else "notice"
+        notice = f'<div class="{cls}">{h(message)}</div>'
+
+    proxy_checked = " checked" if p["proxy_enabled"] else ""
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{h(p["name"])} - pihm-web</title>
+<style>
+:root {{ color-scheme:dark; --bg:#111417; --panel:#1a1f24; --line:#303840; --text:#eef2f5; --muted:#9da7b0; --accent:#60e6e6; --danger:#ff8c8c; }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }}
+main {{ max-width:1000px; margin:0 auto; padding:24px; }}
+h1 {{ margin:0 0 4px; }}
+h2 {{ margin:28px 0 10px; }}
+a {{ color:var(--text); }}
+.card {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-top:12px; }}
+.actions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }}
+.muted,.hint {{ color:var(--muted); }}
+.hint {{ font-size:12px; }}
+.tag {{ font-size:11px; border:1px solid var(--accent); color:var(--accent); padding:2px 6px; border-radius:999px; }}
+.notice {{ margin:18px 0; padding:12px; border:1px solid var(--accent); border-radius:8px; }}
+.notice.error {{ border-color:var(--danger); color:var(--danger); }}
+input,select,textarea,button,.button {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:8px 10px; }}
+input[type=checkbox] {{ min-width:0; }}
+textarea {{ width:100%; min-height:110px; resize:vertical; }}
+button,.button {{ cursor:pointer; text-decoration:none; display:inline-block; }}
+button:hover,.button:hover {{ border-color:var(--accent); }}
+.check {{ display:block; padding:6px 0; }}
+.grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }}
+.table-wrap {{ overflow:auto; border:1px solid var(--line); border-radius:10px; }}
+table {{ width:100%; border-collapse:collapse; }}
+th,td {{ text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); }}
+tr:last-child td {{ border-bottom:0; }}
+form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
+code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
+</style>
+</head>
+<body>
+<main>
+  <a href="/">← Back</a>
+  <h1>{h(p["name"])}</h1>
+  <div class="muted">Edit saved profile settings, then sync when ready.</div>
+  {notice}
+
+  <div class="actions">{default_action}{sync}{gravity}</div>
+
+  <form method="post" action="/profile/save">
+    <input type="hidden" name="csrf" value="{h(CSRF)}">
+    <input type="hidden" name="profile" value="{h(p["name"])}">
+
+    <h2>Description</h2>
+    <input name="description" value="{h(p["description"])}" style="width:100%" required>
+
+    <h2>Blocklists</h2>
+    <div class="card">{''.join(checks) or '<div class="muted">No catalog entries found.</div>'}</div>
+
+    <div class="grid">
+      <div>
+        <h2>Extra blocklist URLs</h2>
+        <textarea name="extra_urls">{h(chr(10).join(p["extra_urls"]))}</textarea>
+      </div>
+      <div>
+        <h2>Allowed domains</h2>
+        <textarea name="allow">{h(chr(10).join(p["allow"]))}</textarea>
+      </div>
+      <div>
+        <h2>Denied domains</h2>
+        <textarea name="deny">{h(chr(10).join(p["deny"]))}</textarea>
+      </div>
+      <div>
+        <h2>Blocked TLDs</h2>
+        <textarea name="tlds">{h(chr(10).join(p["tlds"]))}</textarea>
+      </div>
+    </div>
+
+    <div class="actions"><button type="submit">Save profile</button></div>
+  </form>
+
+  <h2>Clients</h2>
+  {('<div class="table-wrap"><table><thead><tr><th>Label</th><th>Address</th><th></th></tr></thead><tbody>' + ''.join(clients) + '</tbody></table></div>') if clients else '<div class="card muted">No explicit client addresses.</div>'}
+  <div class="card">
+    <form method="post" action="/assign">
+      <input type="hidden" name="csrf" value="{h(CSRF)}">
+      <input type="hidden" name="profile" value="{h(p["name"])}">
+      <div class="actions">
+        <input name="address" placeholder="Client IPv4/IPv6" required>
+        <input name="label" placeholder="Optional label">
+        <button type="submit">Add + sync</button>
+      </div>
+    </form>
+  </div>
+
+  <h2>Arachnidium endpoint</h2>
+  <form method="post" action="/profile/proxy" class="card">
+    <input type="hidden" name="csrf" value="{h(CSRF)}">
+    <input type="hidden" name="profile" value="{h(p["name"])}">
+    <label><input type="checkbox" name="enabled" value="1"{proxy_checked}> Enable reserved endpoint</label>
+    <div class="actions">
+      <input name="port" value="{h(p["proxy_port"])}" placeholder="Port, e.g. 18101">
+      <input name="docker_ip" value="{h(p["proxy_ip"])}" placeholder="Docker IP">
+      <input name="label" value="{h(p["proxy_label"])}" placeholder="Container label">
+      <button type="submit">Save endpoint</button>
+    </div>
+    <div class="hint">This only reserves profile metadata. It does not deploy or force Arachnidium.</div>
+  </form>
+
+  <h2>Clone profile</h2>
+  <form method="post" action="/profile/clone" class="card">
+    <input type="hidden" name="csrf" value="{h(CSRF)}">
+    <input type="hidden" name="profile" value="{h(p["name"])}">
+    <div class="actions">
+      <input name="name" placeholder="New profile name" required>
+      <button type="submit">Clone</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>"""
+
+
+def form_one(data: dict[str, list[str]], key: str) -> str:
+    values = data.get(key) or [""]
+    return values[0] if values else ""
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "pihm-web"
 
@@ -1074,8 +1251,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def redirect(self, message: str, error: bool = False) -> None:
-        target = "/?message=" + quote(message)
+    def redirect(self, message: str, error: bool = False, target: str = "/") -> None:
+        sep = "&" if "?" in target else "?"
+        target = target + sep + "message=" + quote(message)
         if error:
             target += "&error=1"
         self.send_response(HTTPStatus.SEE_OTHER)
@@ -1087,15 +1265,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_auth():
             return
         parsed = urlparse(self.path)
-        if parsed.path not in {"/", "/index.html"}:
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
         q = parse_qs(parsed.query)
         message = q.get("message", [""])[0][:500]
         error = q.get("error", ["0"])[0] == "1"
-        self.send_html(render(message, error))
+        if parsed.path in {"/", "/index.html"}:
+            self.send_html(render(message, error))
+            return
+        if parsed.path == "/profile":
+            name = q.get("name", [""])[0]
+            self.send_html(render_profile_editor(name, message, error))
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
 
-    def post_data(self) -> dict[str, str]:
+    def post_data(self) -> dict[str, list[str]]:
         try:
             size = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -1103,8 +1285,7 @@ class Handler(BaseHTTPRequestHandler):
         if size <= 0 or size > MAX_BODY:
             fail("invalid request size")
         raw = self.rfile.read(size).decode("utf-8", errors="strict")
-        parsed = parse_qs(raw, keep_blank_values=True)
-        return {key: values[0] if values else "" for key, values in parsed.items()}
+        return parse_qs(raw, keep_blank_values=True)
 
     def do_POST(self) -> None:
         if not self.require_auth():
@@ -1112,16 +1293,86 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             data = self.post_data()
-            if not hmac.compare_digest(data.get("csrf", ""), CSRF):
+            if not hmac.compare_digest(form_one(data, "csrf"), CSRF):
                 fail("invalid CSRF token")
 
             path = urlparse(self.path).path
 
+            if path == "/profile/create":
+                name = form_one(data, "name").strip()[:120]
+                preset = form_one(data, "preset").strip()
+                if not name:
+                    fail("profile name is required")
+                if preset not in {"", "normal", "strict", "parental"}:
+                    fail("invalid profile preset")
+                args = ["new", name]
+                if preset:
+                    args += ["--preset", preset]
+                manager(*args)
+                self.redirect(f"Profile {name} created", target=f"/profile?name={quote(name)}")
+                return
+
+            if path == "/profile/clone":
+                source = form_one(data, "profile").strip()
+                name = form_one(data, "name").strip()[:120]
+                if not valid_profile(source):
+                    fail("profile not found")
+                if not name:
+                    fail("new profile name is required")
+                manager("new", name, "--clone", source)
+                self.redirect(f"Profile {name} created", target=f"/profile?name={quote(name)}")
+                return
+
+            if path == "/profile/save":
+                profile_name = form_one(data, "profile").strip()
+                p = profile_by_name(profile_name)
+                write_profile_settings(
+                    p,
+                    form_one(data, "description"),
+                    [value.strip() for value in data.get("keys", []) if value.strip()],
+                    clean_lines(form_one(data, "extra_urls")),
+                    clean_lines(form_one(data, "allow")),
+                    clean_lines(form_one(data, "deny")),
+                    clean_lines(form_one(data, "tlds")),
+                )
+                self.redirect(
+                    f"{profile_name} saved; sync when ready",
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
+            if path == "/profile/proxy":
+                profile_name = form_one(data, "profile").strip()
+                p = profile_by_name(profile_name)
+                write_proxy_settings(
+                    p,
+                    form_one(data, "enabled") == "1",
+                    form_one(data, "port").strip(),
+                    form_one(data, "docker_ip").strip(),
+                    form_one(data, "label").strip()[:120],
+                )
+                self.redirect(
+                    f"{profile_name} endpoint settings saved",
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
+            if path == "/sync-gravity":
+                profile = form_one(data, "profile").strip()
+                if not valid_profile(profile):
+                    fail("profile not found")
+                manager("apply", profile, "--gravity")
+                self.redirect(
+                    f"{profile} synced and blocklists refreshed",
+                    target=f"/profile?name={quote(profile)}",
+                )
+                return
+
             if path == "/tailnet/add":
-                label = data.get("label", "").strip()[:80]
-                tailnet = data.get("tailnet", "").strip()[:200]
-                client_id = data.get("client_id", "").strip()[:300]
-                client_secret = data.get("client_secret", "").strip()[:500]
+                label = form_one(data, "label").strip()[:80]
+                tailnet = form_one(data, "tailnet").strip()[:200]
+                client_id = form_one(data, "client_id").strip()[:300]
+                client_secret = form_one(data, "client_secret").strip()[:500]
                 if not all((label, tailnet, client_id, client_secret)):
                     fail("all secondary tailnet fields are required")
                 rows = [
@@ -1141,16 +1392,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/tailnet/remove":
-                label = data.get("label", "").strip()
+                label = form_one(data, "label").strip()
                 rows = [row for row in load_secondary_tailnets() if row["label"] != label]
                 save_secondary_tailnets(rows)
                 self.redirect(f"Secondary tailnet {label} removed")
                 return
 
             if path == "/assign":
-                profile = data.get("profile", "").strip()
-                address = data.get("address", "").strip()
-                label = data.get("label", "").strip()[:120]
+                profile = form_one(data, "profile").strip()
+                address = form_one(data, "address").strip()
+                label = form_one(data, "label").strip()[:120]
                 if not valid_profile(profile):
                     fail("profile not found")
                 if not valid_address(address):
@@ -1163,7 +1414,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/unassign":
-                address = data.get("address", "").strip()
+                address = form_one(data, "address").strip()
                 if not valid_address(address):
                     fail("invalid client address")
                 manager("unassign", address)
@@ -1171,7 +1422,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/default":
-                profile = data.get("profile", "").strip()
+                profile = form_one(data, "profile").strip()
                 if not valid_profile(profile):
                     fail("profile not found")
                 manager("default", profile)
@@ -1179,7 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/sync":
-                profile = data.get("profile", "").strip()
+                profile = form_one(data, "profile").strip()
                 if not valid_profile(profile):
                     fail("profile not found")
                 manager("apply", profile)
