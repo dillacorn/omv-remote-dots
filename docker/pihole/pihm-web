@@ -40,7 +40,7 @@ TAILNETS_FILE = Path(os.environ.get("PIHM_WEB_TAILNETS_FILE", "/var/lib/pihm-web
 ACTIVE_CLIENT_WINDOW = max(300, int(os.environ.get("PIHM_WEB_ACTIVE_CLIENT_WINDOW", "86400")))
 ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
 CSRF = secrets.token_urlsafe(32)
-MAX_BODY = 16 * 1024
+MAX_BODY = 256 * 1024
 SECONDARY_TAILNET_CACHE: dict[str, tuple[float, list[dict]]] = {}
 SECONDARY_TAILNET_CACHE_SECONDS = 60
 
