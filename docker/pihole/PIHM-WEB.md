@@ -78,7 +78,7 @@ pihm-web-installer uninstall
 
 ## Themes
 
-The theme selector is available on the dashboard and profile editor.
+The theme selector is available in the dashboard toolbar and applies to the dashboard and every modal.
 
 Current palettes match the Awtarchy theme families:
 
