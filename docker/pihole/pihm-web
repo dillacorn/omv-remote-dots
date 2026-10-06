@@ -806,8 +806,13 @@ def recent_dns_clients() -> list[dict]:
     try:
         db = sqlite3.connect(f"file:{FTL_DB}?mode=ro", uri=True)
         db.row_factory = sqlite3.Row
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "queries" not in tables:
+        objects = {
+            r[0]
+            for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+            )
+        }
+        if "queries" not in objects:
             db.close()
             return []
         cols = {r[1] for r in db.execute("PRAGMA table_info(queries)")}
@@ -1381,7 +1386,7 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -
         profile_cards.append(
             f"""<div class="card">
               <div class="card-title">{h(p["name"])} {default}</div>
-              <div class="muted">{p["lists"]} blocklists · {activity_counts.get(p["name"], 0)} DNS clients (24h)</div>
+              <div class="muted">{p["lists"]} blocklists · {activity_counts.get(p["name"], 0)} DNS sources seen (last 24h)</div>
               <div class="hint">{len(p["clients"])} explicit client addresses</div>
               <div class="hint">{("Arachnidium endpoint :" + str(p["proxy_port"]) + " reserved") if p["proxy_enabled"] else "No Arachnidium endpoint reserved"}</div>
               <div class="actions">{edit}{set_default}{sync}</div>
@@ -1591,7 +1596,7 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
   {('<div class="table-wrap"><table><thead><tr><th>Client</th><th>Address</th><th>MAC</th><th>Profile</th><th></th></tr></thead><tbody>' + ''.join(assigned_rows) + '</tbody></table></div>') if assigned_rows else '<div class="empty">No assigned clients.</div>'}
 
   <h2>Recent DNS clients</h2>
-  <div class="status">Unique source addresses that queried Pi-hole during the last 24 hours. Unassigned addresses use the current Default fallback.</div>
+  <div class="status">Unique source IP addresses that queried Pi-hole during the rolling last 24 hours. This is recent activity, not a count of devices currently online. Unassigned sources use the current Default fallback.</div>
   {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Address</th><th>Effective profile</th><th>Last query</th><th>Queries</th></tr></thead><tbody>' + ''.join(dns_rows) + '</tbody></table></div>') if dns_rows else '<div class="empty">No recent DNS clients found in the FTL database.</div>'}
 
   <h2>Discovered LAN clients</h2>
