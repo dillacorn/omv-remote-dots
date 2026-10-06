@@ -176,7 +176,7 @@ Do not mix Arachnidium troubleshooting into normal Pi-hole DNS troubleshooting u
 
 pihm-web is optional and must remain separate from the pihm TUI. Do not make the TUI depend on the web service.
 
-Keep the web interface focused on frequent profile/client tasks rather than cloning the entire Pi-hole administration UI.
+The web interface should cover normal pihm/TUI management so browser users are not forced back to SSH for profile administration. Do not clone unrelated Pi-hole administration features that pihm itself does not own.
 
 Web mutations should reuse pihm/pihole-profile-manager operations so database backups, profile ownership, Default fallback behavior, and Pi-hole reload behavior stay centralized.
 
@@ -185,6 +185,18 @@ The web backend is localhost-only by default. Do not expose it publicly or enabl
 Do not put the Docker socket inside a pihm-web container. The initial implementation runs on the OMV host and reuses the existing manager.
 
 For LAN client assignments, display a discovered MAC address when available, but keep the stable LAN IPv4 address as the Pi-hole client identity. Recommend a router DHCP reservation for that IPv4/MAC pair before treating the assignment as permanent.
+
+Recent-client counts should come from Pi-hole query history and be described as DNS source addresses, not guaranteed physical-device counts. Unassigned querying addresses inherit the selected pihm Default fallback.
+
+### Secondary tailnets
+
+Keep the OMV host on its normal Tailscale login. Do not run multiple tailscaled instances merely for discovery.
+
+Additional tailnets may be configured as read-only discovery sources through Tailscale OAuth clients with Devices/Core Read permission. Store those credentials only in the pihm-web private state directory with root-only permissions.
+
+A secondary tailnet's API-reported 100.x address is discovery metadata, not proof of the source identity Pi-hole will observe across tailnet sharing. Tailscale IPv4 addresses can be tailnet-local and sharing can remap addresses. Only enable direct profile assignment for a secondary-tailnet address after Pi-hole has actually observed that exact source address.
+
+Discovery does not grant connectivity. A device in another tailnet must still be able to reach the OMV/Pi-hole machine, for example through supported Tailscale machine sharing, and the observed DNS source identity must be validated before relying on per-device policy.
 
 ### pihm-web authentication
 
