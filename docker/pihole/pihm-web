@@ -867,16 +867,22 @@ def profile_activity(ps: list[dict]) -> tuple[dict[str, int], list[dict]]:
 
         non_default = [name for name in groups if name and name != "Default"]
         if non_default:
+            effective_profiles = non_default
             effective = " + ".join(non_default)
             for name in non_default:
                 if name in known_profiles:
                     counts[name] += 1
         else:
             effective = default_name or "Pi-hole Default"
+            effective_profiles = [effective]
             if effective in counts:
                 counts[effective] += 1
 
-        rows.append({**item, "profile": effective})
+        rows.append({
+            **item,
+            "profile": effective,
+            "profiles": effective_profiles,
+        })
 
     return counts, rows
 
