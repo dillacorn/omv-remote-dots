@@ -825,10 +825,70 @@ def valid_profile(name: str) -> bool:
 
 def valid_address(value: str) -> bool:
     try:
-        ipaddress.ip_address(value)
+        if "/" in value:
+            ipaddress.ip_network(value, strict=False)
+        else:
+            ipaddress.ip_address(value)
         return True
     except ValueError:
         return False
+
+
+def remove_address_from_other_profiles(address: str, target_name: str) -> None:
+    for p in profiles():
+        if p["name"] == target_name:
+            continue
+        kept = [(a, label) for a, label in p["clients"] if a != address]
+        if len(kept) == len(p["clients"]):
+            continue
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.optionxform = str
+        with p["path"].open(encoding="utf-8") as fh:
+            cfg.read_file(fh)
+        if not cfg.has_section("clients"):
+            cfg.add_section("clients")
+        cfg.set(
+            "clients",
+            "entries",
+            "\n" + "\n".join(f"{a} | {label}" if label else a for a, label in kept),
+        )
+        import io
+        buf = io.StringIO()
+        cfg.write(buf)
+        p["path"].write_text(buf.getvalue(), encoding="utf-8")
+
+
+def live_group_description(name: str) -> str:
+    if not GRAVITY_DB.is_file():
+        return ""
+    try:
+        db = sqlite3.connect(f"file:{GRAVITY_DB}?mode=ro", uri=True)
+        row = db.execute('SELECT description FROM "group" WHERE name=?', (name,)).fetchone()
+        db.close()
+    except Exception:
+        return ""
+    return str(row[0] or "").strip() if row else ""
+
+
+def next_proxy_slot(profile_name: str) -> tuple[int, str]:
+    used_ports = set()
+    used_ips = set()
+    for p in profiles():
+        if p["name"] == profile_name or not p["proxy_enabled"]:
+            continue
+        if str(p["proxy_port"]).isdigit():
+            used_ports.add(int(p["proxy_port"]))
+        if p["proxy_ip"]:
+            used_ips.add(p["proxy_ip"])
+    port = 18101
+    while port in used_ports:
+        port += 1
+    octet = 101
+    while f"172.30.53.{octet}" in used_ips:
+        octet += 1
+    if octet > 254:
+        fail("no free proxy Docker IP remains in 172.30.53.0/24")
+    return port, f"172.30.53.{octet}"
 
 
 def bind_is_loopback() -> bool:
@@ -1220,6 +1280,8 @@ def render_profile_editor(name: str, message: str = "", error: bool = False) -> 
         notice = f'<div class="{cls}">{h(message)}</div>'
 
     proxy_checked = " checked" if p["proxy_enabled"] else ""
+    live_description = live_group_description(p["name"])
+    suggested_port, suggested_ip = next_proxy_slot(p["name"])
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1272,6 +1334,7 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
 
     <h2>Description</h2>
     <input name="description" value="{h(p["description"])}" style="width:100%" required>
+    <div class="hint">Live Pi-hole description: {h(live_description or "none")}</div>
 
     <h2>Blocklists</h2>
     <div class="card">{''.join(checks) or '<div class="muted">No catalog entries found.</div>'}</div>
@@ -1297,6 +1360,12 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
 
     <div class="actions"><button type="submit">Save profile</button></div>
   </form>
+    <form method="post" action="/profile/restore-description" class="inline" style="margin-top:8px">
+    <input type="hidden" name="csrf" value="{h(CSRF)}">
+    <input type="hidden" name="profile" value="{h(p["name"])}">
+    <button type="submit">Restore description from Pi-hole</button>
+  </form>
+
 
   <h2>Clients</h2>
   {('<div class="table-wrap"><table><thead><tr><th>Label</th><th>Address</th><th></th></tr></thead><tbody>' + ''.join(clients) + '</tbody></table></div>') if clients else '<div class="card muted">No explicit client addresses.</div>'}
@@ -1318,8 +1387,8 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
     <input type="hidden" name="profile" value="{h(p["name"])}">
     <label><input type="checkbox" name="enabled" value="1"{proxy_checked}> Enable reserved endpoint</label>
     <div class="actions">
-      <input name="port" value="{h(p["proxy_port"])}" placeholder="Port, e.g. 18101">
-      <input name="docker_ip" value="{h(p["proxy_ip"])}" placeholder="Docker IP">
+      <input name="port" value="{h(p["proxy_port"] or suggested_port)}" placeholder="Port, e.g. 18101">
+      <input name="docker_ip" value="{h(p["proxy_ip"] or suggested_ip)}" placeholder="Docker IP">
       <input name="label" value="{h(p["proxy_label"])}" placeholder="Container label">
       <button type="submit">Save endpoint</button>
     </div>
@@ -1495,6 +1564,27 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
 
+            if path == "/profile/restore-description":
+                profile_name = form_one(data, "profile").strip()
+                p = profile_by_name(profile_name)
+                live = live_group_description(profile_name)
+                if not live:
+                    fail("live Pi-hole group has no description to restore")
+                write_profile_settings(
+                    p,
+                    live,
+                    p["keys"],
+                    p["extra_urls"],
+                    p["allow"],
+                    p["deny"],
+                    p["tlds"],
+                )
+                self.redirect(
+                    f"{profile_name} description restored from Pi-hole",
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
             if path == "/profile/proxy":
                 profile_name = form_one(data, "profile").strip()
                 p = profile_by_name(profile_name)
@@ -1560,6 +1650,7 @@ class Handler(BaseHTTPRequestHandler):
                     fail("profile not found")
                 if not valid_address(address):
                     fail("invalid client address")
+                remove_address_from_other_profiles(address, profile)
                 args = ["assign", profile, address]
                 if label:
                     args += ["--label", label]
