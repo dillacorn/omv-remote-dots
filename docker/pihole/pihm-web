@@ -1021,6 +1021,139 @@ def next_proxy_slot(profile_name: str) -> tuple[int, str]:
     return port, f"172.30.53.{octet}"
 
 
+def write_profile_clients(profile: dict, entries: list[tuple[str, str]]) -> None:
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    with profile["path"].open(encoding="utf-8") as fh:
+        cfg.read_file(fh)
+    if not cfg.has_section("clients"):
+        cfg.add_section("clients")
+    cfg.set(
+        "clients",
+        "entries",
+        "\n" + "\n".join(
+            f"{address} | {label}" if label else address
+            for address, label in entries
+        ),
+    )
+    import io
+    buf = io.StringIO()
+    cfg.write(buf)
+    profile["path"].write_text(buf.getvalue(), encoding="utf-8")
+
+
+def edit_saved_client(
+    profile_name: str,
+    old_address: str,
+    new_address: str,
+    label: str,
+) -> None:
+    if not valid_address(new_address):
+        fail("invalid client address")
+    p = profile_by_name(profile_name)
+    found = False
+    entries = []
+    for address, old_label in p["clients"]:
+        if address == old_address and not found:
+            entries.append((new_address, label))
+            found = True
+        else:
+            entries.append((address, old_label))
+    if not found:
+        fail("client address is no longer in this profile")
+
+    for other in profiles():
+        for address, _ in other["clients"]:
+            if address != new_address:
+                continue
+            if other["name"] != profile_name or address != old_address:
+                fail(f"{new_address} is already saved in profile {other['name']}")
+
+    write_profile_clients(p, entries)
+
+
+def delete_saved_client(profile_name: str, address: str) -> None:
+    p = profile_by_name(profile_name)
+    entries = [(a, label) for a, label in p["clients"] if a != address]
+    if len(entries) == len(p["clients"]):
+        fail("client address is no longer in this profile")
+    write_profile_clients(p, entries)
+
+
+def timer_status_text() -> str:
+    try:
+        proc = subprocess.run(
+            ["systemctl", "status", "pihole-gravity-daily.timer", "--no-pager", "-l"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=10,
+            check=False,
+        )
+        return proc.stdout.strip() or "Timer status unavailable."
+    except Exception:
+        return "Timer status unavailable."
+
+
+def pihm_installer_path() -> Path | None:
+    for path in (Path("/usr/local/bin/pihm-installer"), HOME / "pihm-installer"):
+        if path.is_file():
+            return path
+    return None
+
+
+def detected_proxy_addresses() -> tuple[str, str, str]:
+    hostname = ""
+    tail_ip = ""
+    lan_ip = ""
+
+    raw = run(["tailscale", "status", "--json"])
+    if raw:
+        try:
+            hostname = str(json.loads(raw).get("Self", {}).get("DNSName") or "").rstrip(".")
+        except Exception:
+            pass
+
+    values = run(["tailscale", "ip", "-4"]).splitlines()
+    if values:
+        tail_ip = values[0].strip()
+
+    raw = run(["docker", "inspect", PIHOLE_CONTAINER])
+    if raw:
+        try:
+            info = json.loads(raw)[0]
+            ports = info.get("NetworkSettings", {}).get("Ports", {})
+            for key in ("53/tcp", "53/udp"):
+                for binding in ports.get(key) or []:
+                    value = str(binding.get("HostIp") or "").strip()
+                    if value and value not in {"0.0.0.0", "::", "127.0.0.1"} and not value.startswith("100."):
+                        lan_ip = value
+                        break
+                if lan_ip:
+                    break
+        except Exception:
+            pass
+
+    return (
+        hostname or "OMV Tailscale hostname",
+        lan_ip or "OMV LAN IPv4",
+        tail_ip or "OMV Tailscale IPv4",
+    )
+
+
+def proxy_runtime_info(profile: dict) -> dict:
+    label = profile["proxy_label"] or f"arachnidium-{profile['path'].stem}"
+    running = run(["docker", "inspect", "-f", "{{.State.Running}}", label])
+    hostname, lan_ip, tail_ip = detected_proxy_addresses()
+    return {
+        "label": label,
+        "state": "running" if running == "true" else "not running / not deployed",
+        "hostname": hostname,
+        "lan_ip": lan_ip,
+        "tail_ip": tail_ip,
+    }
+
+
 def bind_is_loopback() -> bool:
     if BIND.casefold() == "localhost":
         return True
@@ -1163,6 +1296,7 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -
               <div class="card-title">{h(p["name"])} {default}</div>
               <div class="muted">{p["lists"]} blocklists · {activity_counts.get(p["name"], 0)} DNS clients (24h)</div>
               <div class="hint">{len(p["clients"])} explicit client addresses</div>
+              <div class="hint">{("Arachnidium endpoint :" + str(p["proxy_port"]) + " reserved") if p["proxy_enabled"] else "No Arachnidium endpoint reserved"}</div>
               <div class="actions">{edit}{set_default}{sync}</div>
             </div>"""
         )
@@ -1284,6 +1418,7 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -
     ]
     default_name = next((p["name"] for p in ps if p["default"]), "Not configured")
     gravity_timer = timer_state()
+    gravity_timer_status = timer_status_text()
     theme_picker = theme_form(theme, "/")
     notice = ""
     if message:
@@ -1388,7 +1523,12 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
       {action_form("/maintenance/timer-enable", {}, "Enable daily updates")}
       {action_form("/maintenance/timer-disable", {}, "Disable daily updates")}
       {action_form("/maintenance/import-groups", {}, "Import current Pi-hole groups")}
+      {action_form("/maintenance/update-pihm", {}, "Update pihm")}
     </div>
+    <details style="margin-top:12px">
+      <summary>Show blocklist-update timer</summary>
+      <pre><code>{h(gravity_timer_status)}</code></pre>
+    </details>
   </div>
   {('<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>ID</th><th>Pi-hole group</th><th>Clients</th><th>Lists</th><th>Rules</th></tr></thead><tbody>' + ''.join(group_rows) + '</tbody></table></div>') if group_rows else ''}
 
@@ -1415,6 +1555,15 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
       <div class="hint">Credentials are stored only in {h(TAILNETS_FILE)} with mode 0600. The secret is never displayed after saving.</div>
     </form>
   </div>
+
+  <h2>Help</h2>
+  <details class="card">
+    <summary>How pihm profiles work</summary>
+    <p>Profiles store blocklists, allow/deny rules, blocked TLDs, client assignments, and optional Arachnidium endpoint metadata.</p>
+    <p><strong>Save profile</strong> changes the INI. <strong>Sync</strong> writes the saved profile to live Pi-hole. <strong>Sync + refresh lists</strong> also downloads current blocklists.</p>
+    <p>The Default fallback is mirrored into Pi-hole's built-in Default group for otherwise-unassigned clients.</p>
+    <p>For a permanent LAN assignment, reserve the displayed IPv4/MAC pair in the router. A device can keep both its LAN IPv4 and Tailscale IPv4 in the same profile.</p>
+  </details>
 
   <footer>
     pihm-web uses the existing pihm manager for writes, backups, Pi-hole reloads, and profile rules.
