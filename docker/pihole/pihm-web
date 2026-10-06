@@ -1792,7 +1792,7 @@ def profile_activity_modal(profile: dict, activity: list[dict], names: dict[str,
 
 def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, open_modal: str = "") -> str:
     ps = profiles()
-    recent_counts, dns_activity = profile_activity(ps)
+    _, dns_activity = profile_activity(ps)
     active_cutoff = int(time.time()) - ACTIVE_NOW_WINDOW
     active_counts = {p["name"]: 0 for p in ps}
     for item in dns_activity:
@@ -2626,15 +2626,29 @@ def check() -> int:
     print(f"Gravity:  {GRAVITY_DB}")
     recent = recent_dns_clients()
     current_profiles = profiles()
-    counts, _ = profile_activity(current_profiles)
+    counts, activity = profile_activity(current_profiles)
+    active_cutoff = int(time.time()) - ACTIVE_NOW_WINDOW
+    active_total = sum(1 for item in activity if item["last_seen"] >= active_cutoff)
+    active_counts = {p["name"]: 0 for p in current_profiles}
+    for item in activity:
+        if item["last_seen"] < active_cutoff:
+            continue
+        for name in item.get("profiles", []):
+            if name in active_counts:
+                active_counts[name] += 1
     default_profile = next((p["name"] for p in current_profiles if p["default"]), "")
 
     print(f"Catalog:  {CATALOG}")
     print(f"Bind:     {BIND}:{PORT}")
     print(f"Auth:     {AUTH_SOURCE}")
+    print(f"Active DNS sources (1h): {active_total}")
     print(f"Recent DNS sources (24h): {len(recent)}")
     if default_profile:
-        print(f"Default activity: {default_profile} = {counts.get(default_profile, 0)} recent sources")
+        print(
+            f"Default activity: {default_profile} = "
+            f"{active_counts.get(default_profile, 0)} active / "
+            f"{counts.get(default_profile, 0)} recent"
+        )
     if AUTH_SOURCE == "pihole":
         print(f"Pi-hole API: {api_url}")
     return 0
