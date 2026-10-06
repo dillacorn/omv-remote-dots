@@ -188,7 +188,7 @@ Keep the browser UI compact:
 - device/discovery/profile lists should have search/filter controls when they can grow;
 - use rectangular controls and panels; do not reintroduce rounded-corner styling;
 - `Devices N` means saved devices grouped from explicit identities;
-- `Recent N` means DNS source addresses actually seen using that live policy in the rolling previous 24 hours;
+- `Active N` means DNS source addresses that queried Pi-hole using that live policy within the previous hour; the activity modal also shows the rolling 24-hour history;
 - help content should teach common workflows step by step rather than merely describe features.
 
 The web backend is localhost-only by default. Do not expose it publicly or enable Tailscale Funnel. Any Tailscale Serve integration must be opt-in and must inspect existing Serve configuration before changing it.
