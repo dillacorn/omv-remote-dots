@@ -129,12 +129,12 @@ If the SSH server disables TCP forwarding, enable only the minimum forwarding ne
 
 The profile cards distinguish two different counts:
 
-- `DNS clients (24h)`: unique source IP addresses that actually queried Pi-hole during the recent window;
+- `DNS sources seen (last 24h)`: unique source IP addresses that actually queried Pi-hole during the rolling previous 24 hours;
 - `explicit client addresses`: addresses saved directly in that profile INI.
 
 For the Default fallback profile, otherwise-unassigned DNS source addresses count toward that fallback because they receive its mirrored policy.
 
-This is a source-address count, not a perfect physical-device count. A router can represent downstream IPv6 clients, and one physical device can legitimately appear once by LAN IPv4 and once by Tailscale IPv4.
+This is recent activity, not a count of devices currently online. It is a source-address count, not a perfect physical-device count. A router can represent downstream IPv6 clients, and one physical device can legitimately appear once by LAN IPv4 and once by Tailscale IPv4.
 
 ## LAN addresses and router reservations
 
