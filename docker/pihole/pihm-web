@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import urllib.error
 import urllib.request
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 HOME = Path(os.environ.get("PIHM_HOME", "/docker/pihole"))
 MANAGER = Path(os.environ.get("PIHOLE_PROFILE_MANAGER", str(HOME / "pihole-profile-manager")))
@@ -34,6 +34,8 @@ AUTH_SOURCE = os.environ.get("PIHM_WEB_AUTH_SOURCE", "pihole").strip().lower() o
 PASSWORD_OVERRIDE = os.environ.get("PIHM_WEB_PASSWORD", "")
 PIHOLE_CONTAINER = os.environ.get("PIHOLE_CONTAINER", "pihole")
 PIHOLE_API_URL = os.environ.get("PIHM_WEB_PIHOLE_API_URL", "").strip()
+TAILNETS_FILE = Path(os.environ.get("PIHM_WEB_TAILNETS_FILE", "/etc/pihm-web-tailnets.json"))
+ACTIVE_CLIENT_WINDOW = max(300, int(os.environ.get("PIHM_WEB_ACTIVE_CLIENT_WINDOW", "86400")))
 ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
 CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 16 * 1024
@@ -346,6 +348,221 @@ def tailscale_devices() -> list[dict]:
     return sorted(out, key=lambda d: (not d["online"], d["name"].casefold()))
 
 
+def load_secondary_tailnets() -> list[dict]:
+    if not TAILNETS_FILE.is_file():
+        return []
+    try:
+        data = json.loads(TAILNETS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = data.get("tailnets", []) if isinstance(data, dict) else []
+    out = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        tailnet = str(item.get("tailnet") or "").strip()
+        client_id = str(item.get("client_id") or "").strip()
+        client_secret = str(item.get("client_secret") or "").strip()
+        if label and tailnet and client_id and client_secret:
+            out.append({
+                "label": label,
+                "tailnet": tailnet,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            })
+    return out
+
+
+def save_secondary_tailnets(rows: list[dict]) -> None:
+    TAILNETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TAILNETS_FILE.with_name(
+        f".{TAILNETS_FILE.name}.tmp-{os.getpid()}-{secrets.token_hex(4)}"
+    )
+    payload = json.dumps({"tailnets": rows}, indent=2) + "\n"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, TAILNETS_FILE)
+        os.chmod(TAILNETS_FILE, 0o600)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def tailscale_oauth_token(entry: dict) -> str:
+    payload = urlencode({
+        "grant_type": "client_credentials",
+        "client_id": entry["client_id"],
+        "client_secret": entry["client_secret"],
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.tailscale.com/api/v2/oauth/token",
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    return str(body.get("access_token") or "").strip()
+
+
+def secondary_tailnet_devices(entry: dict) -> list[dict]:
+    token = tailscale_oauth_token(entry)
+    if not token:
+        fail(f"{entry['label']}: Tailscale OAuth token request failed")
+    tailnet = quote(entry["tailnet"], safe="")
+    request = urllib.request.Request(
+        f"https://api.tailscale.com/api/v2/tailnet/{tailnet}/devices",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        body = json.loads(response.read().decode("utf-8"))
+
+    devices = body.get("devices", []) if isinstance(body, dict) else []
+    out = []
+    for node in devices if isinstance(devices, list) else []:
+        if not isinstance(node, dict):
+            continue
+        ipv4 = ""
+        for value in node.get("addresses") or []:
+            try:
+                ip = ipaddress.ip_address(str(value))
+            except ValueError:
+                continue
+            if ip.version == 4:
+                ipv4 = str(ip)
+                break
+        if not ipv4:
+            continue
+        hostname = str(node.get("hostname") or "").strip()
+        fqdn = str(node.get("name") or "").strip().rstrip(".")
+        name = hostname or (fqdn.split(".", 1)[0] if fqdn else ipv4)
+        out.append({
+            "name": name,
+            "dns": fqdn,
+            "ip": ipv4,
+            "tailnet": entry["label"],
+            "last_seen": str(node.get("lastSeen") or ""),
+        })
+    return sorted(out, key=lambda item: item["name"].casefold())
+
+
+def all_tailscale_devices() -> tuple[list[dict], list[dict]]:
+    devices = []
+    for item in tailscale_devices():
+        devices.append({
+            **item,
+            "tailnet": "Local tailnet",
+            "last_seen": "",
+            "source": "local",
+        })
+
+    states = []
+    for entry in load_secondary_tailnets():
+        try:
+            remote = secondary_tailnet_devices(entry)
+            devices.extend({**item, "online": False, "source": "api"} for item in remote)
+            states.append({
+                "label": entry["label"],
+                "tailnet": entry["tailnet"],
+                "count": len(remote),
+                "error": "",
+            })
+        except Exception as exc:
+            states.append({
+                "label": entry["label"],
+                "tailnet": entry["tailnet"],
+                "count": 0,
+                "error": str(exc),
+            })
+
+    seen = set()
+    unique = []
+    for item in devices:
+        key = (item.get("tailnet", ""), item.get("ip", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique, states
+
+
+def address_matches_client(address: str, client_ip: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    try:
+        if "/" in address:
+            return ip in ipaddress.ip_network(address, strict=False)
+        return ip == ipaddress.ip_address(address)
+    except ValueError:
+        return False
+
+
+def recent_dns_clients() -> list[dict]:
+    if not FTL_DB.is_file():
+        return []
+    cutoff = int(time.time()) - ACTIVE_CLIENT_WINDOW
+    try:
+        db = sqlite3.connect(f"file:{FTL_DB}?mode=ro", uri=True)
+        db.row_factory = sqlite3.Row
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "queries" not in tables:
+            db.close()
+            return []
+        cols = {r[1] for r in db.execute("PRAGMA table_info(queries)")}
+        if not {"timestamp", "client"}.issubset(cols):
+            db.close()
+            return []
+        rows = db.execute(
+            "SELECT client, MAX(timestamp) AS last_seen, COUNT(*) AS query_count "
+            "FROM queries WHERE timestamp >= ? GROUP BY client",
+            (cutoff,),
+        ).fetchall()
+        db.close()
+    except Exception:
+        return []
+
+    out = []
+    for row in rows:
+        value = str(row["client"] or "").strip()
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        out.append({
+            "ip": value,
+            "last_seen": int(row["last_seen"] or 0),
+            "queries": int(row["query_count"] or 0),
+        })
+    return sorted(out, key=lambda item: (-item["last_seen"], item["ip"]))
+
+
+def profile_activity(ps: list[dict]) -> tuple[dict[str, int], list[dict]]:
+    counts = {p["name"]: 0 for p in ps}
+    default_name = next((p["name"] for p in ps if p["default"]), "")
+    rows = []
+    for item in recent_dns_clients():
+        matched = ""
+        for p in ps:
+            if any(address_matches_client(address, item["ip"]) for address, _ in p["clients"]):
+                matched = p["name"]
+                break
+        if not matched:
+            matched = default_name or "Pi-hole Default"
+        if matched in counts:
+            counts[matched] += 1
+        rows.append({**item, "profile": matched})
+    return counts, rows
+
+
 def age_text(value: int) -> str:
     if not value:
         return "seen on LAN"
@@ -460,6 +677,8 @@ def render(message: str = "", error: bool = False) -> str:
     macs = neighbor_map()
     assigned = []
     assigned_addresses = set()
+    activity_counts, dns_activity = profile_activity(ps)
+    tail_devices, tailnet_states = all_tailscale_devices()
 
     for p in ps:
         for address, label in p["clients"]:
@@ -481,7 +700,8 @@ def render(message: str = "", error: bool = False) -> str:
         profile_cards.append(
             f"""<div class="card">
               <div class="card-title">{h(p["name"])} {default}</div>
-              <div class="muted">{p["lists"]} blocklists · {len(p["clients"])} client addresses</div>
+              <div class="muted">{p["lists"]} blocklists · {activity_counts.get(p["name"], 0)} DNS clients (24h)</div>
+              <div class="hint">{len(p["clients"])} explicit client addresses</div>
               <div class="actions">{set_default}{sync}</div>
             </div>"""
         )
@@ -527,8 +747,22 @@ def render(message: str = "", error: bool = False) -> str:
             </tr>"""
         )
 
+    dns_rows = []
+    lan_names = {item["ip"]: item for item in recent_lan_clients()}
+    for item in dns_activity:
+        known = lan_names.get(item["ip"], {})
+        dns_rows.append(
+            f"""<tr>
+              <td>{h(known.get("name") or "—")}</td>
+              <td><code>{h(item["ip"])}</code></td>
+              <td>{h(item["profile"])}</td>
+              <td>{h(age_text(item["last_seen"]))}</td>
+              <td>{item["queries"]}</td>
+            </tr>"""
+        )
+
     tail_rows = []
-    for item in tailscale_devices():
+    for item in tail_devices:
         if item["ip"] in assigned_addresses:
             continue
         assign = action_form(
@@ -543,9 +777,27 @@ def render(message: str = "", error: bool = False) -> str:
         tail_rows.append(
             f"""<tr>
               <td>{h(item["name"])}</td>
+              <td>{h(item.get("tailnet") or "Local tailnet")}</td>
               <td><code>{h(item["ip"])}</code></td>
-              <td>{h("Online" if item["online"] else "Offline")}</td>
+              <td>{h("Online" if item.get("source") == "local" and item.get("online") else (item.get("last_seen") or "API"))}</td>
               <td>{assign}</td>
+            </tr>"""
+        )
+
+    tailnet_rows = []
+    for state in tailnet_states:
+        status = (
+            f'{state["count"]} devices'
+            if not state["error"]
+            else f'Error: {h(state["error"])}'
+        )
+        remove = action_form("/tailnet/remove", {"label": state["label"]}, "Remove")
+        tailnet_rows.append(
+            f"""<tr>
+              <td>{h(state["label"])}</td>
+              <td><code>{h(state["tailnet"])}</code></td>
+              <td>{status}</td>
+              <td>{remove}</td>
             </tr>"""
         )
 
@@ -589,7 +841,8 @@ th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line)
 th {{ color:var(--muted); font-weight:600; background:var(--panel); }}
 tr:last-child td {{ border-bottom:0; }}
 form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
-select,button {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:7px 9px; }}
+select,button,input {{ background:#242b31; color:var(--text); border:1px solid #46515b; border-radius:6px; padding:7px 9px; }}
+input {{ min-width:180px; }}
 button {{ cursor:pointer; }}
 button:hover {{ border-color:var(--accent); }}
 code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
@@ -618,12 +871,33 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
   <h2>Assigned clients</h2>
   {('<div class="table-wrap"><table><thead><tr><th>Client</th><th>Address</th><th>MAC</th><th>Profile</th><th></th></tr></thead><tbody>' + ''.join(assigned_rows) + '</tbody></table></div>') if assigned_rows else '<div class="empty">No assigned clients.</div>'}
 
+  <h2>Recent DNS clients</h2>
+  <div class="status">Unique source addresses that queried Pi-hole during the last 24 hours. Unassigned addresses use the current Default fallback.</div>
+  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Address</th><th>Effective profile</th><th>Last query</th><th>Queries</th></tr></thead><tbody>' + ''.join(dns_rows) + '</tbody></table></div>') if dns_rows else '<div class="empty">No recent DNS clients found in the FTL database.</div>'}
+
   <h2>Discovered LAN clients</h2>
   <div class="status">Reserve a LAN IPv4/MAC on the router before relying on that address for a permanent profile assignment.</div>
   {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>LAN IPv4</th><th>MAC</th><th>Seen</th><th>Profile</th></tr></thead><tbody>' + ''.join(lan_rows) + '</tbody></table></div>') if lan_rows else '<div class="empty">No unassigned LAN clients currently discovered.</div>'}
 
   <h2>Tailscale clients</h2>
-  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailscale IPv4</th><th>Status</th><th>Profile</th></tr></thead><tbody>' + ''.join(tail_rows) + '</tbody></table></div>') if tail_rows else '<div class="empty">No unassigned Tailscale clients currently discovered.</div>'}
+  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet</th><th>Tailscale IPv4</th><th>Status</th><th>Profile</th></tr></thead><tbody>' + ''.join(tail_rows) + '</tbody></table></div>') if tail_rows else '<div class="empty">No unassigned Tailscale clients currently discovered.</div>'}
+
+  <h2>Secondary tailnets</h2>
+  <div class="status">Optional read-only device discovery for other tailnets. Use a Tailscale OAuth client with Devices/Core Read permission.</div>
+  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet ID</th><th>Status</th><th></th></tr></thead><tbody>' + ''.join(tailnet_rows) + '</tbody></table></div>') if tailnet_rows else '<div class="empty">No secondary tailnets configured.</div>'}
+  <div class="card" style="margin-top:12px">
+    <form method="post" action="/tailnet/add">
+      <input type="hidden" name="csrf" value="{h(CSRF)}">
+      <div class="actions">
+        <input name="label" placeholder="Name, e.g. Wife" required>
+        <input name="tailnet" placeholder="Tailnet ID" required>
+        <input name="client_id" placeholder="OAuth client ID" required>
+        <input name="client_secret" type="password" placeholder="OAuth client secret" required>
+        <button type="submit">Add tailnet</button>
+      </div>
+      <div class="hint">Credentials are stored only in {h(TAILNETS_FILE)} with mode 0600. The secret is never displayed after saving.</div>
+    </form>
+  </div>
 
   <footer>
     pihm-web uses the existing pihm manager for writes, backups, Pi-hole reloads, and profile rules.
@@ -707,6 +981,36 @@ class Handler(BaseHTTPRequestHandler):
                 fail("invalid CSRF token")
 
             path = urlparse(self.path).path
+
+            if path == "/tailnet/add":
+                label = data.get("label", "").strip()[:80]
+                tailnet = data.get("tailnet", "").strip()[:200]
+                client_id = data.get("client_id", "").strip()[:300]
+                client_secret = data.get("client_secret", "").strip()[:500]
+                if not all((label, tailnet, client_id, client_secret)):
+                    fail("all secondary tailnet fields are required")
+                rows = [
+                    row for row in load_secondary_tailnets()
+                    if row["label"].casefold() != label.casefold()
+                ]
+                entry = {
+                    "label": label,
+                    "tailnet": tailnet,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                }
+                secondary_tailnet_devices(entry)
+                rows.append(entry)
+                save_secondary_tailnets(rows)
+                self.redirect(f"Secondary tailnet {label} added")
+                return
+
+            if path == "/tailnet/remove":
+                label = data.get("label", "").strip()
+                rows = [row for row in load_secondary_tailnets() if row["label"] != label]
+                save_secondary_tailnets(rows)
+                self.redirect(f"Secondary tailnet {label} removed")
+                return
 
             if path == "/assign":
                 profile = data.get("profile", "").strip()
