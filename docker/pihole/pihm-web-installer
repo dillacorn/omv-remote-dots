@@ -119,6 +119,12 @@ else
 fi
 chmod 0600 "$ENV_FILE"
 
+set -a
+. "$ENV_FILE"
+set +a
+PIHM_HOME="$HOME" python3 "$stage/pihm-web" --check
+printf 'Staged pihm-web runtime validation: PASS\n'
+
 install -m 0755 "$stage/pihm-web" "$HOME/pihm-web"
 install -m 0755 "$stage/pihm-web-installer" "$HOME/pihm-web-installer"
 ln -sfn "$HOME/pihm-web" "$BINDIR/pihm-web"
@@ -156,6 +162,7 @@ set +a
 
 systemctl enable pihm-web.service >/dev/null
 systemctl restart pihm-web.service
+systemctl is-active --quiet pihm-web.service || die "pihm-web service did not stay active after restart"
 
 printf '\npihm-web installed.\n'
 printf 'Local backend: http://127.0.0.1:8091\n'
