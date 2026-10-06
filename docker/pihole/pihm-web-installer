@@ -66,23 +66,33 @@ python3 -m py_compile "$stage/pihm-web"
 bash -n "$stage/pihm-web-installer"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-    password="$(
-        python3 - <<'PY'
-import secrets
-print(secrets.token_urlsafe(24))
-PY
-    )"
     umask 077
     cat >"$ENV_FILE" <<EOF
 PIHM_WEB_BIND=127.0.0.1
 PIHM_WEB_PORT=8091
 PIHM_WEB_USERNAME=admin
-PIHM_WEB_PASSWORD=$password
+PIHM_WEB_AUTH_SOURCE=pihole
 EOF
     chmod 0600 "$ENV_FILE"
     printf 'Created %s\n' "$ENV_FILE"
-    printf 'Initial username: admin\n'
-    printf 'Password stored in %s (mode 0600).\n' "$ENV_FILE"
+else
+    if grep -q '^PIHM_WEB_PASSWORD=' "$ENV_FILE"; then
+        backup="$ENV_FILE.backup-$(date '+%Y%m%d-%H%M%S')"
+        cp -a "$ENV_FILE" "$backup"
+        tmp="$(mktemp)"
+        sed '/^PIHM_WEB_PASSWORD=/d' "$ENV_FILE" >"$tmp"
+        if grep -q '^PIHM_WEB_AUTH_SOURCE=' "$tmp"; then
+            sed -i 's/^PIHM_WEB_AUTH_SOURCE=.*/PIHM_WEB_AUTH_SOURCE=pihole/' "$tmp"
+        else
+            printf '\nPIHM_WEB_AUTH_SOURCE=pihole\n' >>"$tmp"
+        fi
+        install -m 0600 "$tmp" "$ENV_FILE"
+        rm -f "$tmp"
+        printf 'Removed the old separate pihm-web password. Backup: %s\n' "$backup"
+    elif ! grep -q '^PIHM_WEB_AUTH_SOURCE=' "$ENV_FILE"; then
+        printf '\nPIHM_WEB_AUTH_SOURCE=pihole\n' >>"$ENV_FILE"
+        chmod 0600 "$ENV_FILE"
+    fi
 fi
 
 install -m 0755 "$stage/pihm-web" "$HOME/pihm-web"
@@ -121,6 +131,7 @@ PIHM_WEB_PASSWORD="$(
 printf '\npihm-web installed.\n'
 printf 'Local backend: http://127.0.0.1:8091\n'
 printf 'Status: pihm-web-installer status\n'
-printf 'Credentials: sudo cat %s\n' "$ENV_FILE"
+printf 'Login username: admin\n'
+printf 'Login password: use the existing Pi-hole web password\n'
 printf '\nThe service is localhost-only by default.\n'
 printf 'Use SSH port forwarding or Tailscale Serve for remote browser access.\n'
