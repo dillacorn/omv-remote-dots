@@ -2274,25 +2274,25 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/maintenance/gravity":
                 manager("gravity")
-                self.redirect("Blocklists refreshed")
+                self.redirect("Blocklists refreshed", target="/?open=maintenance")
                 return
 
             if path == "/maintenance/timer-enable":
                 manager("timer", "install")
-                self.redirect("Daily blocklist updates enabled")
+                self.redirect("Daily blocklist updates enabled", target="/?open=maintenance")
                 return
 
             if path == "/maintenance/timer-disable":
                 manager("timer", "remove")
-                self.redirect("Daily blocklist updates disabled")
+                self.redirect("Daily blocklist updates disabled", target="/?open=maintenance")
                 return
 
             if path == "/maintenance/import-groups":
                 imported = import_current_groups()
                 if imported:
-                    self.redirect("Imported: " + ", ".join(imported))
+                    self.redirect("Imported: " + ", ".join(imported), target="/?open=maintenance")
                 else:
-                    self.redirect("No new Pi-hole groups to import")
+                    self.redirect("No new Pi-hole groups to import", target="/?open=maintenance")
                 return
 
             if path == "/maintenance/update-pihm":
@@ -2300,7 +2300,7 @@ class Handler(BaseHTTPRequestHandler):
                 if installer is None:
                     fail("pihm-installer not found")
                 run_checked([str(installer), "update"], timeout=180)
-                self.redirect("pihm updated")
+                self.redirect("pihm updated", target="/?open=maintenance")
                 return
 
             if path == "/profile/create":
@@ -2469,7 +2469,7 @@ class Handler(BaseHTTPRequestHandler):
                 SECONDARY_TAILNET_CACHE[
                     "|".join((entry["label"], entry["tailnet"], entry["client_id"]))
                 ] = (time.monotonic(), devices)
-                self.redirect(f"Secondary tailnet {label} added")
+                self.redirect(f"Secondary tailnet {label} added", target="/?open=tailnets")
                 return
 
             if path == "/tailnet/remove":
@@ -2477,7 +2477,7 @@ class Handler(BaseHTTPRequestHandler):
                 rows = [row for row in load_secondary_tailnets() if row["label"] != label]
                 save_secondary_tailnets(rows)
                 clear_secondary_tailnet_cache()
-                self.redirect(f"Secondary tailnet {label} removed")
+                self.redirect(f"Secondary tailnet {label} removed", target="/?open=tailnets")
                 return
 
             if path == "/assign":
@@ -2493,7 +2493,7 @@ class Handler(BaseHTTPRequestHandler):
                 if label:
                     args += ["--label", label]
                 manager(*args)
-                self.redirect(f"{address} assigned to {profile}")
+                self.redirect(f"{address} assigned to {profile}", target="/?open=add-device")
                 return
 
             if path == "/unassign":
@@ -2525,9 +2525,37 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
 
         except subprocess.CalledProcessError as exc:
-            self.redirect(f"pihm command failed with status {exc.returncode}", True)
+            target = "/"
+            try:
+                current_path = urlparse(self.path).path
+                profile_name = form_one(data, "profile") if "data" in locals() else ""
+                if profile_name and valid_profile(profile_name):
+                    target = profile_return(profile_name)
+                elif current_path.startswith("/maintenance/"):
+                    target = "/?open=maintenance"
+                elif current_path.startswith("/tailnet/"):
+                    target = "/?open=tailnets"
+                elif current_path in {"/assign", "/profile/link-local-device", "/profile/link-local-device-name"}:
+                    target = "/?open=add-device"
+            except Exception:
+                target = "/"
+            self.redirect(f"pihm command failed with status {exc.returncode}", True, target=target)
         except Exception as exc:
-            self.redirect(str(exc), True)
+            target = "/"
+            try:
+                current_path = urlparse(self.path).path
+                profile_name = form_one(data, "profile") if "data" in locals() else ""
+                if profile_name and valid_profile(profile_name):
+                    target = profile_return(profile_name)
+                elif current_path.startswith("/maintenance/"):
+                    target = "/?open=maintenance"
+                elif current_path.startswith("/tailnet/"):
+                    target = "/?open=tailnets"
+                elif current_path in {"/assign", "/profile/link-local-device", "/profile/link-local-device-name"}:
+                    target = "/?open=add-device"
+            except Exception:
+                target = "/"
+            self.redirect(str(exc), True, target=target)
 
 
 def check() -> int:
