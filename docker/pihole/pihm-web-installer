@@ -8,12 +8,17 @@
 set -euo pipefail
 
 REPO="${PIHM_WEB_REPO:-dillacorn/omv-remote-dots}"
-REF="${PIHM_WEB_REF:-main}"
 HOME="${PIHM_HOME:-/docker/pihole}"
 BINDIR="${PIHM_WEB_BINDIR:-/usr/local/bin}"
 ENV_FILE="${PIHM_WEB_ENV_FILE:-/etc/pihm-web.env}"
 SERVICE_FILE="/etc/systemd/system/pihm-web.service"
 ACTION="${1:-install}"
+
+REF="${PIHM_WEB_REF:-}"
+if [[ -z "$REF" && -f "$ENV_FILE" ]]; then
+    REF="$(sed -n 's/^PIHM_WEB_SOURCE_REF=//p' "$ENV_FILE" | tail -n1)"
+fi
+REF="${REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${REF}/docker/pihole"
 
 die() {
@@ -83,6 +88,7 @@ PIHM_WEB_BIND=127.0.0.1
 PIHM_WEB_PORT=8091
 PIHM_WEB_USERNAME=admin
 PIHM_WEB_AUTH_SOURCE=pihole
+PIHM_WEB_SOURCE_REF=$REF
 EOF
     chmod 0600 "$ENV_FILE"
     printf 'Created %s\n' "$ENV_FILE"
@@ -105,6 +111,13 @@ else
         chmod 0600 "$ENV_FILE"
     fi
 fi
+
+if grep -q '^PIHM_WEB_SOURCE_REF=' "$ENV_FILE"; then
+    sed -i "s|^PIHM_WEB_SOURCE_REF=.*|PIHM_WEB_SOURCE_REF=$REF|" "$ENV_FILE"
+else
+    printf '\nPIHM_WEB_SOURCE_REF=%s\n' "$REF" >>"$ENV_FILE"
+fi
+chmod 0600 "$ENV_FILE"
 
 install -m 0755 "$stage/pihm-web" "$HOME/pihm-web"
 install -m 0755 "$stage/pihm-web-installer" "$HOME/pihm-web-installer"
@@ -146,6 +159,7 @@ systemctl restart pihm-web.service
 
 printf '\npihm-web installed.\n'
 printf 'Local backend: http://127.0.0.1:8091\n'
+printf 'Source ref: %s\n' "$REF"
 printf 'Status: pihm-web-installer status\n'
 printf 'Login username: admin\n'
 printf 'Login password: use the existing Pi-hole web password\n'
