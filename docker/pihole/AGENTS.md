@@ -185,3 +185,9 @@ The web backend is localhost-only by default. Do not expose it publicly or enabl
 Do not put the Docker socket inside a pihm-web container. The initial implementation runs on the OMV host and reuses the existing manager.
 
 For LAN client assignments, display a discovered MAC address when available, but keep the stable LAN IPv4 address as the Pi-hole client identity. Recommend a router DHCP reservation for that IPv4/MAC pair before treating the assignment as permanent.
+
+### pihm-web authentication
+
+By default, pihm-web must reuse the existing Pi-hole web password instead of generating a second credential. The host-side service may read `FTLCONF_webserver_api_password` from the already-running Pi-hole container at startup. Do not print, duplicate, or commit that password.
+
+A separate pihm-web password should exist only as an explicit opt-in custom-auth mode.
