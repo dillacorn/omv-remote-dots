@@ -1355,90 +1355,489 @@ def action_form(action: str, fields: dict[str, str], label: str, select_profile:
     )
 
 
-def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -> str:
+def modal_key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def profile_modal_id(name: str) -> str:
+    return f"profile-{modal_key(name)}"
+
+
+def devices_modal_id(name: str) -> str:
+    return f"devices-{modal_key(name)}"
+
+
+def recent_modal_id(name: str) -> str:
+    return f"recent-{modal_key(name)}"
+
+
+def profile_return(name: str) -> str:
+    return f"/?open={quote(profile_modal_id(name))}"
+
+
+def device_group_name(label: str, address: str) -> str:
+    name = (label or "").strip()
+    for suffix in (" - LAN", " - Tailscale"):
+        if name.casefold().endswith(suffix.casefold()):
+            name = name[: -len(suffix)].rstrip()
+            break
+    return name or address
+
+
+def grouped_profile_devices(profile: dict) -> list[dict]:
+    groups: dict[str, dict] = {}
+    for address, label in profile["clients"]:
+        name = device_group_name(label, address)
+        key = name.casefold()
+        item = groups.setdefault(key, {"name": name, "addresses": []})
+        item["addresses"].append({"address": address, "label": label})
+    return sorted(groups.values(), key=lambda item: item["name"].casefold())
+
+
+def dashboard_css(theme: str) -> str:
+    return theme_css(theme) + """
+* { box-sizing:border-box; }
+html,body { margin:0; min-height:100%; background:var(--bg); color:var(--text); }
+body { font:14px/1.4 system-ui,sans-serif; }
+body.modal-open { overflow:hidden; }
+main { max-width:1240px; margin:0 auto; padding:18px; }
+h1,h2,h3 { margin:0; }
+h1 { font-size:25px; }
+h2 { font-size:18px; }
+h3 { font-size:15px; margin:18px 0 8px; }
+a { color:var(--text); }
+code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; }
+.topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; border-bottom:1px solid var(--line); padding-bottom:12px; }
+.top-meta { color:var(--muted); text-align:right; }
+.toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:12px 0; }
+.toolbar .grow { flex:1 1 220px; }
+.section-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:14px 0 8px; }
+.profile-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:8px; }
+.profile-card { border:1px solid var(--line); background:var(--panel); padding:11px; min-width:0; }
+.profile-name { font-size:16px; font-weight:700; line-height:1.25; }
+.profile-meta { color:var(--muted); margin-top:4px; }
+.card-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
+button,.button,input,select,textarea {
+  appearance:none; border:1px solid var(--line); border-radius:0; background:var(--control);
+  color:var(--text); padding:7px 9px; font:inherit;
+}
+button,.button { cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; min-height:34px; }
+button:hover,.button:hover { border-color:var(--accent); background:var(--hover,var(--control)); }
+input[type=checkbox] { appearance:auto; min-height:0; width:auto; padding:0; }
+input[type=search],input[type=text],input:not([type]),select { min-height:34px; }
+textarea { width:100%; min-height:105px; resize:vertical; }
+form.inline { display:inline-flex; gap:5px; align-items:center; margin:0; }
+.tag { display:inline-block; border:1px solid var(--accent); color:var(--accent); padding:1px 5px; margin-left:5px; font-size:10px; vertical-align:2px; }
+.muted,.hint { color:var(--muted); }
+.hint { font-size:12px; }
+.notice { border:1px solid var(--accent); padding:9px; margin:10px 0; }
+.notice.error { border-color:var(--danger); color:var(--danger); }
+.table-wrap { overflow:auto; border:1px solid var(--line); }
+table { width:100%; border-collapse:collapse; min-width:680px; }
+th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+th { color:var(--muted); font-weight:600; background:var(--panel); position:sticky; top:0; z-index:1; }
+tr:last-child td { border-bottom:0; }
+.compact-list { border:1px solid var(--line); }
+.compact-row { display:grid; grid-template-columns:minmax(140px,1.1fr) minmax(180px,1.6fr) auto; gap:8px; align-items:center; padding:7px 8px; border-bottom:1px solid var(--line); }
+.compact-row:last-child { border-bottom:0; }
+.empty { border:1px dashed var(--line); color:var(--muted); padding:10px; }
+.split { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.field { margin-top:10px; }
+.field label { display:block; font-weight:600; margin-bottom:4px; }
+.check-list { border:1px solid var(--line); max-height:230px; overflow:auto; }
+.check { display:block; padding:6px 8px; border-bottom:1px solid var(--line); }
+.check:last-child { border-bottom:0; }
+.modal {
+  position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+  padding:18px; background:rgba(0,0,0,.66); opacity:0; pointer-events:none;
+  transition:opacity .14s ease;
+}
+.modal.open { opacity:1; pointer-events:auto; }
+.modal-panel {
+  width:min(980px,96vw); max-height:90vh; overflow:auto; background:var(--bg);
+  border:1px solid var(--accent); box-shadow:0 20px 70px rgba(0,0,0,.55);
+  transform:translateY(8px); transition:transform .14s ease;
+}
+.modal.open .modal-panel { transform:translateY(0); }
+.modal-panel.wide { width:min(1160px,97vw); }
+.modal-head {
+  position:sticky; top:0; z-index:5; display:flex; justify-content:space-between; align-items:center;
+  gap:10px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line);
+}
+.modal-body { padding:12px; }
+.modal-close { width:36px; min-width:36px; padding:5px; font-size:18px; }
+.modal-actions { display:flex; flex-wrap:wrap; gap:5px; margin:8px 0 12px; }
+.filter { width:100%; max-width:360px; }
+details { border:1px solid var(--line); padding:8px; margin-top:10px; }
+summary { cursor:pointer; font-weight:600; }
+.walkthrough { border-left:3px solid var(--accent); padding:8px 10px; margin:10px 0; background:var(--panel); }
+.walkthrough ol { margin:7px 0 0 20px; padding:0; }
+.walkthrough li { margin:4px 0; }
+@media (max-width:720px) {
+  main { padding:10px; }
+  .topbar { flex-direction:column; }
+  .top-meta { text-align:left; }
+  .profile-grid,.split { grid-template-columns:1fr; }
+  .compact-row { grid-template-columns:1fr; }
+  .modal { padding:6px; }
+  .modal-panel,.modal-panel.wide { width:100%; max-height:96vh; }
+}
+"""
+
+
+def dashboard_script() -> str:
+    return """
+(function () {
+  function closeAll() {
+    document.querySelectorAll('.modal.open').forEach(function (m) {
+      m.classList.remove('open');
+      m.setAttribute('aria-hidden','true');
+    });
+    document.body.classList.remove('modal-open');
+  }
+
+  function openModal(id, profile) {
+    var modal = document.getElementById(id);
+    if (!modal) return;
+    closeAll();
+    if (profile) {
+      modal.querySelectorAll('select[data-profile-select]').forEach(function (sel) {
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === profile) {
+            sel.selectedIndex = i;
+            break;
+          }
+        }
+      });
+    }
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden','false');
+    document.body.classList.add('modal-open');
+    var focus = modal.querySelector('input[type=search],input:not([type=hidden]),select,button');
+    if (focus) setTimeout(function () { focus.focus(); }, 50);
+  }
+
+  document.addEventListener('click', function (event) {
+    var opener = event.target.closest('[data-open-modal]');
+    if (opener) {
+      event.preventDefault();
+      openModal(opener.getAttribute('data-open-modal'), opener.getAttribute('data-profile') || '');
+      return;
+    }
+    var closer = event.target.closest('[data-close-modal]');
+    if (closer) {
+      event.preventDefault();
+      closeAll();
+      return;
+    }
+    if (event.target.classList.contains('modal')) closeAll();
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeAll();
+  });
+
+  document.querySelectorAll('[data-filter-input]').forEach(function (input) {
+    input.addEventListener('input', function () {
+      var zone = input.closest('[data-filter-zone]');
+      if (!zone) return;
+      var query = input.value.trim().toLowerCase();
+      zone.querySelectorAll('[data-filter-item]').forEach(function (item) {
+        var haystack = (item.getAttribute('data-search') || item.textContent || '').toLowerCase();
+        item.style.display = !query || haystack.indexOf(query) !== -1 ? '' : 'none';
+      });
+    });
+  });
+
+  var auto = document.body.getAttribute('data-auto-open');
+  if (auto) openModal(auto, '');
+})();
+"""
+
+
+def modal_shell(modal_id: str, title: str, body: str, wide: bool = False) -> str:
+    cls = "modal-panel wide" if wide else "modal-panel"
+    return f"""<div class="modal" id="{h(modal_id)}" aria-hidden="true">
+      <section class="{cls}" role="dialog" aria-modal="true" aria-labelledby="{h(modal_id)}-title">
+        <header class="modal-head">
+          <h2 id="{h(modal_id)}-title">{h(title)}</h2>
+          <button type="button" class="modal-close" data-close-modal aria-label="Close">×</button>
+        </header>
+        <div class="modal-body">{body}</div>
+      </section>
+    </div>"""
+
+
+def profile_settings_modal(profile: dict) -> str:
+    p = profile
+    catalog = catalog_entries()
+    selected = set(p["keys"])
+    checks = []
+    for key, comment in catalog.items():
+        checked = " checked" if key in selected else ""
+        checks.append(
+            f'<label class="check" data-filter-item data-search="{h(key + " " + comment)}">'
+            f'<input type="checkbox" name="keys" value="{h(key)}"{checked}> '
+            f'<strong>{h(key)}</strong> <span class="muted">{h(comment)}</span></label>'
+        )
+
+    clients = []
+    for address, label in p["clients"]:
+        clients.append(
+            f"""<tr data-filter-item data-search="{h(address + " " + label)}">
+              <td>
+                <form method="post" action="/profile/client-save" class="inline">
+                  <input type="hidden" name="csrf" value="{h(CSRF)}">
+                  <input type="hidden" name="profile" value="{h(p["name"])}">
+                  <input type="hidden" name="old_address" value="{h(address)}">
+                  <input name="address" value="{h(address)}" required>
+                  <input name="label" value="{h(label)}" placeholder="Label">
+                  <button type="submit">Save</button>
+                </form>
+              </td>
+              <td>{action_form("/profile/client-delete", {"profile": p["name"], "address": address}, "Delete")}</td>
+            </tr>"""
+        )
+
+    live_description = live_group_description(p["name"])
+    suggested_port, suggested_ip = next_proxy_slot(p["name"])
+    proxy_checked = " checked" if p["proxy_enabled"] else ""
+    proxy_info = ""
+    if p["proxy_enabled"]:
+        info = proxy_runtime_info(p)
+        proxy_info = f"""<div class="compact-list" style="margin-top:8px">
+          <div class="compact-row"><strong>Container</strong><code>{h(info["label"])}</code><span>{h(info["state"])}</span></div>
+          <div class="compact-row"><strong>Preferred host</strong><code>{h(info["hostname"])}:{h(p["proxy_port"])}</code><span></span></div>
+          <div class="compact-row"><strong>LAN</strong><code>{h(info["lan_ip"])}:{h(p["proxy_port"])}</code><span></span></div>
+          <div class="compact-row"><strong>Tailscale</strong><code>{h(info["tail_ip"])}:{h(p["proxy_port"])}</code><span></span></div>
+        </div>"""
+
+    return_to = profile_return(p["name"])
+    default_action = (
+        '<span class="tag">DEFAULT</span>'
+        if p["default"]
+        else action_form("/default", {"profile": p["name"], "return_to": return_to}, "Make default")
+    )
+    sync = action_form("/sync", {"profile": p["name"], "return_to": return_to}, "Sync")
+    gravity = action_form("/sync-gravity", {"profile": p["name"], "return_to": return_to}, "Sync + refresh")
+
+    body = f"""
+      <div class="modal-actions">
+        {default_action}
+        {sync}
+        {gravity}
+        <button type="button" data-open-modal="{h(devices_modal_id(p["name"]))}">Devices</button>
+        <button type="button" data-open-modal="add-device" data-profile="{h(p["name"])}">Add device</button>
+      </div>
+
+      <h3>Rename</h3>
+      <form method="post" action="/profile/rename" class="inline">
+        <input type="hidden" name="csrf" value="{h(CSRF)}">
+        <input type="hidden" name="profile" value="{h(p["name"])}">
+        <input name="name" value="{h(p["name"])}" required>
+        <button type="submit">Rename profile</button>
+      </form>
+      <div class="hint">The live Pi-hole group is renamed too when it exists. Backups are created first.</div>
+
+      <form method="post" action="/profile/save" data-filter-zone>
+        <input type="hidden" name="csrf" value="{h(CSRF)}">
+        <input type="hidden" name="profile" value="{h(p["name"])}">
+
+        <div class="field">
+          <label>Description</label>
+          <input name="description" value="{h(p["description"])}" style="width:100%" required>
+          <div class="hint">Live Pi-hole description: {h(live_description or "none")}</div>
+        </div>
+
+        <h3>Blocklists</h3>
+        <input class="filter" type="search" placeholder="Filter blocklists" data-filter-input>
+        <div class="check-list" style="margin-top:6px">{''.join(checks) or '<div class="empty">No catalog entries found.</div>'}</div>
+
+        <div class="split">
+          <div class="field"><label>Extra blocklist URLs</label><textarea name="extra_urls">{h(chr(10).join(p["extra_urls"]))}</textarea></div>
+          <div class="field"><label>Allowed domains</label><textarea name="allow">{h(chr(10).join(p["allow"]))}</textarea></div>
+          <div class="field"><label>Denied domains</label><textarea name="deny">{h(chr(10).join(p["deny"]))}</textarea></div>
+          <div class="field"><label>Blocked TLDs</label><textarea name="tlds">{h(chr(10).join(p["tlds"]))}</textarea></div>
+        </div>
+
+        <div class="modal-actions"><button type="submit">Save profile</button></div>
+      </form>
+
+      <form method="post" action="/profile/restore-description" class="inline">
+        <input type="hidden" name="csrf" value="{h(CSRF)}">
+        <input type="hidden" name="profile" value="{h(p["name"])}">
+        <button type="submit">Restore description from Pi-hole</button>
+      </form>
+
+      <details>
+        <summary>Saved client addresses</summary>
+        <div data-filter-zone style="margin-top:8px">
+          <input class="filter" type="search" placeholder="Filter saved clients" data-filter-input>
+          {('<div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Address / label</th><th></th></tr></thead><tbody>' + ''.join(clients) + '</tbody></table></div>') if clients else '<div class="empty" style="margin-top:6px">No explicit client addresses.</div>'}
+        </div>
+      </details>
+
+      <details>
+        <summary>Arachnidium endpoint</summary>
+        <form method="post" action="/profile/proxy" style="margin-top:8px">
+          <input type="hidden" name="csrf" value="{h(CSRF)}">
+          <input type="hidden" name="profile" value="{h(p["name"])}">
+          <label><input type="checkbox" name="enabled" value="1"{proxy_checked}> Enable reserved endpoint</label>
+          <div class="toolbar">
+            <input name="port" value="{h(p["proxy_port"] or suggested_port)}" placeholder="Port">
+            <input name="docker_ip" value="{h(p["proxy_ip"] or suggested_ip)}" placeholder="Docker IP">
+            <input name="label" value="{h(p["proxy_label"])}" placeholder="Container label">
+            <button type="submit">Save endpoint</button>
+          </div>
+          <div class="hint">This reserves metadata only. It does not deploy or force Arachnidium.</div>
+        </form>
+        {proxy_info}
+      </details>
+
+      <details>
+        <summary>Clone profile</summary>
+        <form method="post" action="/profile/clone" class="inline" style="margin-top:8px">
+          <input type="hidden" name="csrf" value="{h(CSRF)}">
+          <input type="hidden" name="profile" value="{h(p["name"])}">
+          <input name="name" placeholder="New profile name" required>
+          <button type="submit">Clone</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Raw INI</summary>
+        <pre><code>{h(p["path"].read_text(encoding="utf-8"))}</code></pre>
+      </details>
+    """
+    return modal_shell(profile_modal_id(p["name"]), f"Edit: {p['name']}", body, wide=True)
+
+
+def profile_devices_modal(profile: dict, activity: list[dict]) -> str:
+    groups = grouped_profile_devices(profile)
+    rows = []
+    for group in groups:
+        addresses = "<br>".join(
+            f'<code>{h(item["address"])}</code>'
+            + (f' <span class="muted">{h(item["label"])}</span>' if item["label"] else "")
+            for item in group["addresses"]
+        )
+        rows.append(
+            f"""<tr data-filter-item data-search="{h(group["name"] + " " + " ".join(x["address"] for x in group["addresses"]))}">
+              <td><strong>{h(group["name"])}</strong></td>
+              <td>{addresses}</td>
+            </tr>"""
+        )
+
+    recent = [item for item in activity if profile["name"] in item.get("profiles", [])]
+    body = f"""
+      <div class="modal-actions">
+        <button type="button" data-open-modal="add-device" data-profile="{h(profile["name"])}">Add device</button>
+        <button type="button" data-open-modal="{h(profile_modal_id(profile["name"]))}">Edit profile</button>
+      </div>
+      <div data-filter-zone>
+        <input class="filter" type="search" placeholder="Filter devices" data-filter-input>
+        {('<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Device</th><th>Saved identities</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>') if rows else '<div class="empty" style="margin-top:8px">No devices are explicitly saved to this profile.</div>'}
+      </div>
+      <div class="hint" style="margin-top:8px">
+        Saved devices are grouped by their labels, so one physical device can show both LAN and Tailscale identities together.
+        The Default fallback can legitimately have zero saved devices while still serving many recent DNS sources.
+      </div>
+      <h3>Recent activity using this policy</h3>
+      <div class="hint">{len(recent)} source addresses seen during the rolling last 24 hours.</div>
+    """
+    return modal_shell(devices_modal_id(profile["name"]), f"Devices: {profile['name']}", body)
+
+
+def profile_recent_modal(profile: dict, activity: list[dict], names: dict[str, str]) -> str:
+    recent = [item for item in activity if profile["name"] in item.get("profiles", [])]
+    rows = []
+    for item in recent:
+        rows.append(
+            f"""<tr data-filter-item data-search="{h(names.get(item["ip"], "") + " " + item["ip"])}">
+              <td>{h(names.get(item["ip"], "—"))}</td>
+              <td><code>{h(item["ip"])}</code></td>
+              <td>{h(age_text(item["last_seen"]))}</td>
+              <td>{item["queries"]}</td>
+            </tr>"""
+        )
+    body = f"""
+      <div class="hint">This is recent DNS activity, not a count of devices currently online. One device can appear under more than one source address.</div>
+      <div data-filter-zone style="margin-top:8px">
+        <input class="filter" type="search" placeholder="Filter recent sources" data-filter-input>
+        {('<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Name</th><th>Source address</th><th>Last query</th><th>Queries</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>') if rows else '<div class="empty" style="margin-top:8px">No DNS source addresses were seen using this policy during the last 24 hours.</div>'}
+      </div>
+    """
+    return modal_shell(recent_modal_id(profile["name"]), f"Recent activity: {profile['name']}", body)
+
+
+def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, open_modal: str = "") -> str:
     ps = profiles()
-    macs = neighbor_map()
-    assigned = []
-    assigned_addresses = set()
     activity_counts, dns_activity = profile_activity(ps)
+    lan_clients = recent_lan_clients()
+    macs = neighbor_map()
     tail_devices, tailnet_states = all_tailscale_devices()
 
-    for p in ps:
-        for address, label in p["clients"]:
-            assigned_addresses.add(address)
-            assigned.append({
-                "address": address,
-                "label": label,
-                "profile": p["name"],
-                "mac": macs.get(address, ""),
-            })
+    assigned_addresses = {
+        address
+        for p in ps
+        for address, _ in p["clients"]
+    }
+
+    name_by_ip: dict[str, str] = {}
+    for item in lan_clients:
+        if item.get("name"):
+            name_by_ip[item["ip"]] = item["name"]
+    for item in tail_devices:
+        if item.get("name"):
+            name_by_ip[item["ip"]] = item["name"]
 
     profile_cards = []
+    modals = []
+
     for p in ps:
+        groups = grouped_profile_devices(p)
         default = '<span class="tag">DEFAULT</span>' if p["default"] else ""
-        set_default = "" if p["default"] else action_form(
-            "/default", {"profile": p["name"]}, "Make default"
-        )
-        sync = action_form("/sync", {"profile": p["name"]}, "Sync")
-        edit = f'<a class="button" href="/profile?name={quote(p["name"])}">Edit</a>'
+        proxy = f' · proxy :{h(p["proxy_port"])}' if p["proxy_enabled"] else ""
+        search_blob = p["name"] + " " + p["description"]
+
+        card_actions = [
+            f'<button type="button" data-open-modal="{h(profile_modal_id(p["name"]))}">Edit</button>',
+            f'<button type="button" data-open-modal="{h(devices_modal_id(p["name"]))}">Devices {len(groups)}</button>',
+            f'<button type="button" data-open-modal="{h(recent_modal_id(p["name"]))}">Recent {activity_counts.get(p["name"], 0)}</button>',
+            action_form("/sync", {"profile": p["name"]}, "Sync"),
+        ]
+        if not p["default"]:
+            card_actions.append(action_form("/default", {"profile": p["name"]}, "Make default"))
+
         profile_cards.append(
-            f"""<div class="card">
-              <div class="card-title">{h(p["name"])} {default}</div>
-              <div class="muted">{p["lists"]} blocklists · {activity_counts.get(p["name"], 0)} DNS sources seen (last 24h)</div>
-              <div class="hint">{len(p["clients"])} explicit client addresses</div>
-              <div class="hint">{("Arachnidium endpoint :" + str(p["proxy_port"]) + " reserved") if p["proxy_enabled"] else "No Arachnidium endpoint reserved"}</div>
-              <div class="actions">{edit}{set_default}{sync}</div>
-            </div>"""
+            f"""<article class="profile-card" data-filter-item data-search="{h(search_blob)}">
+              <div class="profile-name">{h(p["name"])}{default}</div>
+              <div class="profile-meta">{p["lists"]} blocklists{proxy}</div>
+              <div class="card-actions">{''.join(card_actions)}</div>
+            </article>"""
         )
+
+        modals.append(profile_settings_modal(p))
+        modals.append(profile_devices_modal(p, dns_activity))
+        modals.append(profile_recent_modal(p, dns_activity, name_by_ip))
 
     assigned_rows = []
-    for item in sorted(assigned, key=lambda x: (x["profile"].casefold(), x["address"])):
-        remove = action_form("/unassign", {"address": item["address"]}, "Remove")
-        assigned_rows.append(
-            f"""<tr>
-              <td>{h(item["label"] or "—")}</td>
-              <td><code>{h(item["address"])}</code></td>
-              <td><code>{h(item["mac"] or "—")}</code></td>
-              <td>{h(item["profile"])}</td>
-              <td>{remove}</td>
-            </tr>"""
-        )
+    for p in ps:
+        for address, label in p["clients"]:
+            assigned_rows.append(
+                f"""<tr data-filter-item data-search="{h((label or "") + " " + address + " " + p["name"])}">
+                  <td>{h(device_group_name(label, address))}</td>
+                  <td><code>{h(address)}</code></td>
+                  <td>{h(p["name"])}</td>
+                </tr>"""
+            )
 
-    lan_rows = []
-    for item in recent_lan_clients():
-        if item["ip"] in assigned_addresses:
-            continue
-        assign = action_form(
-            "/assign",
-            {
-                "address": item["ip"],
-                "label": item["name"] or f"LAN device {item['ip']}",
-            },
-            "Assign",
-            select_profile=True,
-        )
-        reserve = (
-            f'Reserve <code>{h(item["ip"])}</code> for <code>{h(item["mac"])}</code> on the router.'
-            if item["mac"]
-            else "MAC not currently visible in the neighbor table."
-        )
-        lan_rows.append(
-            f"""<tr>
-              <td>{h(item["name"] or "Unknown")}</td>
-              <td><code>{h(item["ip"])}</code></td>
-              <td><code>{h(item["mac"] or "—")}</code></td>
-              <td>{h(age_text(item["last_seen"]))}<div class="hint">{reserve}</div></td>
-              <td>{assign}</td>
-            </tr>"""
-        )
-
-    dns_rows = []
-    lan_names = {item["ip"]: item for item in recent_lan_clients()}
+    recent_rows = []
     for item in dns_activity:
-        known = lan_names.get(item["ip"], {})
-        dns_rows.append(
-            f"""<tr>
-              <td>{h(known.get("name") or "—")}</td>
+        recent_rows.append(
+            f"""<tr data-filter-item data-search="{h(name_by_ip.get(item["ip"], "") + " " + item["ip"] + " " + item["profile"])}">
+              <td>{h(name_by_ip.get(item["ip"], "—"))}</td>
               <td><code>{h(item["ip"])}</code></td>
               <td>{h(item["profile"])}</td>
               <td>{h(age_text(item["last_seen"]))}</td>
@@ -1446,70 +1845,230 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -
             </tr>"""
         )
 
-    tail_rows = []
+    all_devices_body = f"""
+      <div data-filter-zone>
+        <input class="filter" type="search" placeholder="Search devices, addresses, or profiles" data-filter-input>
+        <h3>Saved assignments</h3>
+        {('<div class="table-wrap"><table><thead><tr><th>Device</th><th>Address</th><th>Profile</th></tr></thead><tbody>' + ''.join(assigned_rows) + '</tbody></table></div>') if assigned_rows else '<div class="empty">No saved client assignments.</div>'}
+        <h3>Recent DNS sources</h3>
+        <div class="hint">Rolling last 24 hours. This is source-address activity, not a physical-device count.</div>
+        {('<div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Name</th><th>Address</th><th>Live policy</th><th>Last query</th><th>Queries</th></tr></thead><tbody>' + ''.join(recent_rows) + '</tbody></table></div>') if recent_rows else '<div class="empty" style="margin-top:6px">No recent DNS sources found.</div>'}
+      </div>
+    """
+    modals.append(modal_shell("all-devices", "All devices", all_devices_body, wide=True))
+
+    add_rows = []
+    for item in lan_clients:
+        if item["ip"] in assigned_addresses:
+            continue
+        reserve = (
+            f'{item["mac"]} · reserve this IPv4/MAC on the router'
+            if item["mac"]
+            else "MAC not currently visible"
+        )
+        add_rows.append(
+            f"""<tr data-filter-item data-search="{h((item.get("name") or "") + " " + item["ip"] + " " + item.get("mac",""))}">
+              <td>{h(item.get("name") or "Unknown")}</td>
+              <td>LAN</td>
+              <td><code>{h(item["ip"])}</code><div class="hint">{h(reserve)}</div></td>
+              <td>
+                <form method="post" action="/assign" class="inline">
+                  <input type="hidden" name="csrf" value="{h(CSRF)}">
+                  <input type="hidden" name="address" value="{h(item["ip"])}">
+                  <input type="hidden" name="label" value="{h(item.get("name") or "LAN device")}">
+                  <select name="profile" data-profile-select>{profile_options()}</select>
+                  <button type="submit">Assign</button>
+                </form>
+              </td>
+            </tr>"""
+        )
+
     recent_dns_addresses = {item["ip"] for item in dns_activity}
     for item in tail_devices:
         if item["ip"] in assigned_addresses:
             continue
-        verified = item.get("source") == "local" or item["ip"] in recent_dns_addresses
-        assign = (
-            action_form(
-                "/assign",
-                {
-                    "address": item["ip"],
-                    "label": f"{item['name']} - Tailscale",
-                },
-                "Assign",
-                select_profile=True,
-            )
-            if verified
-            else '<span class="muted">Not seen by Pi-hole yet</span>'
-        )
         if item.get("source") == "local":
+            action = f"""<form method="post" action="/profile/link-local-device" class="inline">
+              <input type="hidden" name="csrf" value="{h(CSRF)}">
+              <input type="hidden" name="device" value="{h(item["ip"])}">
+              <select name="profile" data-profile-select>{profile_options()}</select>
+              <button type="submit">Link + sync</button>
+            </form>"""
             state = "Online" if item.get("online") else "Offline"
         else:
-            state = "Verified DNS source" if verified else (item.get("last_seen") or "Discovered by API")
-        tail_rows.append(
-            f"""<tr>
+            verified = item["ip"] in recent_dns_addresses
+            if verified:
+                action = f"""<form method="post" action="/assign" class="inline">
+                  <input type="hidden" name="csrf" value="{h(CSRF)}">
+                  <input type="hidden" name="address" value="{h(item["ip"])}">
+                  <input type="hidden" name="label" value="{h(item["name"] + " - Tailscale")}">
+                  <select name="profile" data-profile-select>{profile_options()}</select>
+                  <button type="submit">Assign</button>
+                </form>"""
+                state = "Verified DNS source"
+            else:
+                action = '<span class="muted">Send DNS through Pi-hole first</span>'
+                state = item.get("last_seen") or "Discovered by API"
+
+        add_rows.append(
+            f"""<tr data-filter-item data-search="{h(item["name"] + " " + item["ip"] + " " + item.get("tailnet",""))}">
               <td>{h(item["name"])}</td>
-              <td>{h(item.get("tailnet") or "Local tailnet")}</td>
-              <td><code>{h(item["ip"])}</code></td>
-              <td>{h(state)}</td>
-              <td>{assign}</td>
+              <td>{h(item.get("tailnet") or "Tailscale")}</td>
+              <td><code>{h(item["ip"])}</code><div class="hint">{h(state)}</div></td>
+              <td>{action}</td>
             </tr>"""
         )
+
+    manual_add = f"""
+      <details>
+        <summary>Manual address</summary>
+        <form method="post" action="/assign" class="toolbar" style="margin-top:8px">
+          <input type="hidden" name="csrf" value="{h(CSRF)}">
+          <input name="address" placeholder="IPv4, IPv6, or CIDR" required>
+          <input name="label" placeholder="Optional label">
+          <select name="profile" data-profile-select>{profile_options()}</select>
+          <button type="submit">Assign + sync</button>
+        </form>
+      </details>
+    """
+    add_device_body = f"""
+      <div class="hint">Search the discovered list, choose the profile, then assign. Local Tailscale devices use the link workflow so a confident LAN identity can be paired automatically.</div>
+      <div data-filter-zone style="margin-top:8px">
+        <input class="filter" type="search" placeholder="Search discovered devices" data-filter-input>
+        {('<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Device</th><th>Source</th><th>Address / status</th><th>Profile</th></tr></thead><tbody>' + ''.join(add_rows) + '</tbody></table></div>') if add_rows else '<div class="empty" style="margin-top:8px">No unassigned devices discovered.</div>'}
+      </div>
+      {manual_add}
+    """
+    modals.append(modal_shell("add-device", "Add device", add_device_body, wide=True))
+
+    group_rows = [
+        f"""<tr><td>{row["id"]}</td><td>{h(row["name"])}</td><td>{row["clients"]}</td><td>{row["lists"]}</td><td>{row["rules"]}</td></tr>"""
+        for row in group_status()
+    ]
+    gravity_timer = timer_state()
+    maintenance_body = f"""
+      <div class="compact-list">
+        <div class="compact-row"><strong>Daily blocklist timer</strong><span>{h(gravity_timer)}</span><span></span></div>
+      </div>
+      <div class="modal-actions">
+        {action_form("/maintenance/gravity", {}, "Refresh blocklists now")}
+        {action_form("/maintenance/timer-enable", {}, "Enable daily updates")}
+        {action_form("/maintenance/timer-disable", {}, "Disable daily updates")}
+        {action_form("/maintenance/import-groups", {}, "Import current groups")}
+        {action_form("/maintenance/update-pihm", {}, "Update pihm")}
+      </div>
+      <details><summary>Timer status</summary><pre><code>{h(timer_status_text())}</code></pre></details>
+      <h3>Live Pi-hole groups</h3>
+      {('<div class="table-wrap"><table><thead><tr><th>ID</th><th>Group</th><th>Clients</th><th>Lists</th><th>Rules</th></tr></thead><tbody>' + ''.join(group_rows) + '</tbody></table></div>') if group_rows else '<div class="empty">No group status available.</div>'}
+    """
+    modals.append(modal_shell("maintenance", "Maintenance", maintenance_body, wide=True))
 
     tailnet_rows = []
     for state in tailnet_states:
-        status = (
-            f'{state["count"]} devices'
-            if not state["error"]
-            else f'Error: {h(state["error"])}'
-        )
-        remove = action_form("/tailnet/remove", {"label": state["label"]}, "Remove")
+        status = f'{state["count"]} devices' if not state["error"] else f'Error: {state["error"]}'
         tailnet_rows.append(
-            f"""<tr>
+            f"""<tr data-filter-item data-search="{h(state["label"] + " " + state["tailnet"])}">
               <td>{h(state["label"])}</td>
               <td><code>{h(state["tailnet"])}</code></td>
-              <td>{status}</td>
-              <td>{remove}</td>
+              <td>{h(status)}</td>
+              <td>{action_form("/tailnet/remove", {"label": state["label"]}, "Remove")}</td>
             </tr>"""
         )
+    tailnets_body = f"""
+      <div class="hint">Secondary tailnets are read-only discovery sources. Their addresses are not assignable until Pi-hole has actually seen that source address.</div>
+      <div data-filter-zone style="margin-top:8px">
+        <input class="filter" type="search" placeholder="Filter secondary tailnets" data-filter-input>
+        {('<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Name</th><th>Tailnet ID</th><th>Status</th><th></th></tr></thead><tbody>' + ''.join(tailnet_rows) + '</tbody></table></div>') if tailnet_rows else '<div class="empty" style="margin-top:8px">No secondary tailnets configured.</div>'}
+      </div>
+      <h3>Add secondary tailnet</h3>
+      <div class="hint">In that tailnet: Tailscale Admin → Trust credentials → OAuth → grant only Devices/Core Read. Copy the Tailnet ID from General.</div>
+      <form method="post" action="/tailnet/add" class="toolbar">
+        <input type="hidden" name="csrf" value="{h(CSRF)}">
+        <input name="label" placeholder="Display name" required>
+        <input name="tailnet" placeholder="Tailnet ID" required>
+        <input name="client_id" placeholder="OAuth client ID" required>
+        <input name="client_secret" type="password" placeholder="OAuth client secret" required>
+        <button type="submit">Add tailnet</button>
+      </form>
+      <div class="hint">The secret is stored root-only under {h(TAILNETS_FILE)} and is not displayed again.</div>
+    """
+    modals.append(modal_shell("tailnets", "Secondary tailnets", tailnets_body, wide=True))
 
-    group_rows = [
-        f"""<tr>
-          <td>{row["id"]}</td>
-          <td>{h(row["name"])}</td>
-          <td>{row["clients"]}</td>
-          <td>{row["lists"]}</td>
-          <td>{row["rules"]}</td>
-        </tr>"""
-        for row in group_status()
-    ]
+    create_body = f"""
+      <form method="post" action="/profile/create">
+        <input type="hidden" name="csrf" value="{h(CSRF)}">
+        <div class="field"><label>Profile name</label><input name="name" style="width:100%" required></div>
+        <div class="field">
+          <label>Starting preset</label>
+          <select name="preset" style="width:100%">
+            <option value="">Blank</option>
+            <option value="normal">Normal</option>
+            <option value="strict">Strict</option>
+            <option value="parental">Parental</option>
+          </select>
+        </div>
+        <div class="modal-actions"><button type="submit">Create profile</button></div>
+      </form>
+    """
+    modals.append(modal_shell("create-profile", "Create profile", create_body))
+
+    help_body = """
+      <div class="walkthrough">
+        <strong>Assign a normal home device</strong>
+        <ol>
+          <li>Open <strong>Add device</strong>.</li>
+          <li>Search by device name, LAN IP, MAC, or Tailscale name.</li>
+          <li>Choose the profile.</li>
+          <li>For a local Tailscale device, use <strong>Link + sync</strong>; pihm pairs the Tailscale identity with a LAN identity only when it can do so confidently.</li>
+          <li>If a LAN IPv4/MAC is shown, reserve that pair in the router so the assignment stays stable.</li>
+        </ol>
+      </div>
+      <div class="walkthrough">
+        <strong>Edit a profile safely</strong>
+        <ol>
+          <li>Click <strong>Edit</strong> on the profile.</li>
+          <li>Change blocklists, allow/deny rules, TLDs, description, or advanced settings.</li>
+          <li><strong>Save profile</strong> writes only the INI.</li>
+          <li><strong>Sync</strong> applies the saved profile to live Pi-hole. <strong>Sync + refresh</strong> also downloads the current blocklists.</li>
+        </ol>
+      </div>
+      <div class="walkthrough">
+        <strong>Understand Devices vs Recent</strong>
+        <ol>
+          <li><strong>Devices N</strong> counts saved devices, grouping LAN and Tailscale identities with the same device label.</li>
+          <li><strong>Recent N</strong> counts source IP addresses that actually queried Pi-hole using that live policy during the rolling last 24 hours.</li>
+          <li>The Default profile can show <strong>Devices 0</strong> but a large <strong>Recent</strong> count because unassigned clients inherit it automatically.</li>
+        </ol>
+      </div>
+      <div class="walkthrough">
+        <strong>Rename a profile</strong>
+        <ol>
+          <li>Open <strong>Edit</strong>.</li>
+          <li>Change the name in the Rename section.</li>
+          <li>pihm backs up the INI and gravity database, then renames the live Pi-hole group when it exists.</li>
+        </ol>
+      </div>
+      <div class="walkthrough">
+        <strong>Use another person's tailnet</strong>
+        <ol>
+          <li>Open <strong>Tailnets</strong> and add a read-only OAuth client from that other tailnet.</li>
+          <li>Share the OMV/Pi-hole Tailscale machine to that user, or otherwise provide a supported route to Pi-hole.</li>
+          <li>Have the remote device actually send DNS through Pi-hole.</li>
+          <li>Wait until pihm-web marks that exact source address as verified, then assign it to a profile.</li>
+        </ol>
+      </div>
+      <div class="walkthrough">
+        <strong>Default fallback</strong>
+        <ol>
+          <li>Use <strong>Make default</strong> on the profile that should protect otherwise-unassigned clients.</li>
+          <li>When synced, pihm mirrors that policy into Pi-hole's built-in Default group.</li>
+          <li>Explicit device assignments remain separate and can use stricter profiles.</li>
+        </ol>
+      </div>
+    """
+    modals.append(modal_shell("help", "Help: common tasks", help_body, wide=True))
+
     default_name = next((p["name"] for p in ps if p["default"]), "Not configured")
-    gravity_timer = timer_state()
-    gravity_timer_status = timer_status_text()
-    theme_picker = theme_form(theme, "/")
     notice = ""
     if message:
         cls = "notice error" if error else "notice"
@@ -1521,403 +2080,47 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>pihm-web</title>
-<style>
-{theme_css(theme)}
-* {{ box-sizing:border-box; }}
-body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }}
-main {{ max-width:1200px; margin:0 auto; padding:24px; }}
-h1 {{ margin:0; font-size:28px; }}
-h2 {{ margin:30px 0 12px; font-size:20px; }}
-.top {{ display:flex; gap:16px; justify-content:space-between; align-items:end; flex-wrap:wrap; }}
-.status {{ color:var(--muted); }}
-.grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }}
-.card {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }}
-.card-title {{ font-weight:700; font-size:17px; }}
-.tag {{ font-size:11px; border:1px solid var(--accent); color:var(--accent); padding:2px 6px; border-radius:999px; }}
-.muted,.hint {{ color:var(--muted); }}
-.hint {{ font-size:12px; margin-top:4px; max-width:420px; }}
-.actions {{ margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }}
-.notice {{ margin:18px 0; padding:12px; border:1px solid var(--accent); border-radius:8px; }}
-.notice.error {{ border-color:var(--danger); color:var(--danger); }}
-.table-wrap {{ overflow:auto; border:1px solid var(--line); border-radius:10px; }}
-table {{ width:100%; border-collapse:collapse; min-width:720px; }}
-th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }}
-th {{ color:var(--muted); font-weight:600; background:var(--panel); }}
-tr:last-child td {{ border-bottom:0; }}
-form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
-select,button,input,.button {{ background:var(--control); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 9px; }}
-input {{ min-width:180px; }}
-button,.button {{ cursor:pointer; text-decoration:none; display:inline-block; }}
-button:hover,.button:hover {{ border-color:var(--accent); }}
-code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
-.empty {{ color:var(--muted); padding:14px; border:1px dashed var(--line); border-radius:10px; }}
-footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
-</style>
+<style>{dashboard_css(theme)}</style>
 </head>
-<body>
+<body data-auto-open="{h(open_modal)}">
 <main>
-  <div class="top">
+  <header class="topbar">
     <div>
       <h1>pihm-web</h1>
-      <div class="status">Pi-hole profile manager</div>
+      <div class="muted">Pi-hole profile manager</div>
     </div>
-    <div>
-      <div class="status">
-        Default: <strong>{h(default_name)}</strong><br>
-        Upstream: <strong>{h(upstream_text())}</strong>
-      </div>
-      <div class="actions">{theme_picker}</div>
+    <div class="top-meta">
+      Default: <strong>{h(default_name)}</strong><br>
+      Upstream: <strong>{h(upstream_text())}</strong>
     </div>
-  </div>
+  </header>
 
   {notice}
 
-  <h2>Profiles</h2>
-  <div class="grid">{''.join(profile_cards) or '<div class="empty">No profiles found.</div>'}</div>
-  <div class="card" style="margin-top:12px">
-    <form method="post" action="/profile/create">
-      <input type="hidden" name="csrf" value="{h(CSRF)}">
-      <div class="actions">
-        <input name="name" placeholder="New profile name" required>
-        <select name="preset">
-          <option value="">Blank</option>
-          <option value="normal">Normal</option>
-          <option value="strict">Strict</option>
-          <option value="parental">Parental</option>
-        </select>
-        <button type="submit">Create profile</button>
-      </div>
-    </form>
-  </div>
+  <nav class="toolbar">
+    <button type="button" data-open-modal="add-device">Add device</button>
+    <button type="button" data-open-modal="all-devices">All devices</button>
+    <button type="button" data-open-modal="create-profile">New profile</button>
+    <button type="button" data-open-modal="maintenance">Maintenance</button>
+    <button type="button" data-open-modal="tailnets">Tailnets</button>
+    <button type="button" data-open-modal="help">Help</button>
+    <span class="grow"></span>
+    {theme_form(theme, "/")}
+  </nav>
 
-  <h2>Assigned clients</h2>
-  {('<div class="table-wrap"><table><thead><tr><th>Client</th><th>Address</th><th>MAC</th><th>Profile</th><th></th></tr></thead><tbody>' + ''.join(assigned_rows) + '</tbody></table></div>') if assigned_rows else '<div class="empty">No assigned clients.</div>'}
-
-  <h2>Recent DNS clients</h2>
-  <div class="status">Unique source IP addresses that queried Pi-hole during the rolling last 24 hours. This is recent activity, not a count of devices currently online. Unassigned sources use the current Default fallback.</div>
-  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Address</th><th>Effective profile</th><th>Last query</th><th>Queries</th></tr></thead><tbody>' + ''.join(dns_rows) + '</tbody></table></div>') if dns_rows else '<div class="empty">No recent DNS clients found in the FTL database.</div>'}
-
-  <h2>Discovered LAN clients</h2>
-  <div class="status">Reserve a LAN IPv4/MAC on the router before relying on that address for a permanent profile assignment.</div>
-  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>LAN IPv4</th><th>MAC</th><th>Seen</th><th>Profile</th></tr></thead><tbody>' + ''.join(lan_rows) + '</tbody></table></div>') if lan_rows else '<div class="empty">No unassigned LAN clients currently discovered.</div>'}
-
-  <h2>Tailscale clients</h2>
-  <div class="status">Secondary-tailnet addresses must be seen by Pi-hole before pihm-web enables assignment.</div>
-  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet</th><th>Tailscale IPv4</th><th>Status</th><th>Profile</th></tr></thead><tbody>' + ''.join(tail_rows) + '</tbody></table></div>') if tail_rows else '<div class="empty">No unassigned Tailscale clients currently discovered.</div>'}
-
-  <h2>Maintenance</h2>
-  <div class="card">
-    <div class="status">Daily blocklist timer: <strong>{h(gravity_timer)}</strong></div>
-    <div class="actions">
-      {action_form("/maintenance/gravity", {}, "Refresh blocklists now")}
-      {action_form("/maintenance/timer-enable", {}, "Enable daily updates")}
-      {action_form("/maintenance/timer-disable", {}, "Disable daily updates")}
-      {action_form("/maintenance/import-groups", {}, "Import current Pi-hole groups")}
-      {action_form("/maintenance/update-pihm", {}, "Update pihm")}
+  <section data-filter-zone>
+    <div class="section-head">
+      <h2>Profiles</h2>
+      <input class="filter" type="search" placeholder="Filter profiles" data-filter-input>
     </div>
-    <details style="margin-top:12px">
-      <summary>Show blocklist-update timer</summary>
-      <pre><code>{h(gravity_timer_status)}</code></pre>
-    </details>
-  </div>
-  {('<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>ID</th><th>Pi-hole group</th><th>Clients</th><th>Lists</th><th>Rules</th></tr></thead><tbody>' + ''.join(group_rows) + '</tbody></table></div>') if group_rows else ''}
-
-  <h2>Secondary tailnets</h2>
-  <div class="status">Optional read-only device discovery for other tailnets.</div>
-  <details class="card" style="margin-top:12px">
-    <summary>Add another tailnet</summary>
-    <div class="hint" style="margin-top:8px">
-      In that tailnet's Tailscale admin console: Trust credentials → Credential → OAuth → grant Devices/Core Read.
-      Copy the client ID and secret. Copy the Tailnet ID from the General page, then enter them below.
+    <div class="profile-grid">
+      {''.join(profile_cards) or '<div class="empty">No profiles found.</div>'}
     </div>
-  </details>
-  {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet ID</th><th>Status</th><th></th></tr></thead><tbody>' + ''.join(tailnet_rows) + '</tbody></table></div>') if tailnet_rows else '<div class="empty">No secondary tailnets configured.</div>'}
-  <div class="card" style="margin-top:12px">
-    <form method="post" action="/tailnet/add">
-      <input type="hidden" name="csrf" value="{h(CSRF)}">
-      <div class="actions">
-        <input name="label" placeholder="Name, e.g. Wife" required>
-        <input name="tailnet" placeholder="Tailnet ID" required>
-        <input name="client_id" placeholder="OAuth client ID" required>
-        <input name="client_secret" type="password" placeholder="OAuth client secret" required>
-        <button type="submit">Add tailnet</button>
-      </div>
-      <div class="hint">Credentials are stored only in {h(TAILNETS_FILE)} with mode 0600. The secret is never displayed after saving.</div>
-    </form>
-  </div>
-
-  <h2>Help</h2>
-  <details class="card">
-    <summary>How pihm profiles work</summary>
-    <p>Profiles store blocklists, allow/deny rules, blocked TLDs, client assignments, and optional Arachnidium endpoint metadata.</p>
-    <p><strong>Save profile</strong> changes the INI. <strong>Sync</strong> writes the saved profile to live Pi-hole. <strong>Sync + refresh lists</strong> also downloads current blocklists.</p>
-    <p>The Default fallback is mirrored into Pi-hole's built-in Default group for otherwise-unassigned clients.</p>
-    <p>For a permanent LAN assignment, reserve the displayed IPv4/MAC pair in the router. A device can keep both its LAN IPv4 and Tailscale IPv4 in the same profile.</p>
-  </details>
-
-  <footer>
-    pihm-web uses the existing pihm manager for writes, backups, Pi-hole reloads, and profile rules.
-    The web service listens on localhost by default.
-  </footer>
+  </section>
 </main>
-</body>
-</html>"""
 
-
-def render_profile_editor(name: str, message: str = "", error: bool = False, theme: str = DEFAULT_THEME) -> str:
-    p = profile_by_name(name)
-    catalog = catalog_entries()
-    selected = set(p["keys"])
-    checks = []
-    for key, comment in catalog.items():
-        checked = " checked" if key in selected else ""
-        checks.append(
-            f'<label class="check"><input type="checkbox" name="keys" value="{h(key)}"{checked}> '
-            f'<strong>{h(key)}</strong> <span class="muted">{h(comment)}</span></label>'
-        )
-
-    clients = []
-    for address, label in p["clients"]:
-        save = f"""<form method="post" action="/profile/client-save" class="inline">
-          <input type="hidden" name="csrf" value="{h(CSRF)}">
-          <input type="hidden" name="profile" value="{h(p["name"])}">
-          <input type="hidden" name="old_address" value="{h(address)}">
-          <input name="address" value="{h(address)}" required>
-          <input name="label" value="{h(label)}" placeholder="Optional label">
-          <button type="submit">Save</button>
-        </form>"""
-        delete = action_form(
-            "/profile/client-delete",
-            {"profile": p["name"], "address": address},
-            "Delete",
-        )
-        clients.append(
-            f"""<tr>
-              <td>{save}</td>
-              <td>{delete}</td>
-            </tr>"""
-        )
-
-    current_addresses = {address for address, _ in p["clients"]}
-    link_rows = []
-    lan_macs = neighbor_map()
-    lan_candidates = recent_lan_clients()
-    for device in tailscale_devices():
-        lan_ip, reason = auto_lan_for_tail_device(device, lan_candidates)
-        already_linked = device["ip"] in current_addresses and (
-            not lan_ip or lan_ip in current_addresses
-        )
-        if already_linked:
-            action = '<span class="muted">Already linked</span>'
-        else:
-            action = action_form(
-                "/profile/link-local-device",
-                {"profile": p["name"], "device": device["ip"]},
-                "Link + sync",
-            )
-        lan_text = "Not confidently detected"
-        if lan_ip:
-            mac = lan_macs.get(lan_ip, "")
-            reserve = (
-                f" · reserve {lan_ip} for {mac}"
-                if mac
-                else ""
-            )
-            lan_text = f"{lan_ip} ({reason}){reserve}"
-        link_rows.append(
-            f"""<tr>
-              <td>{h(device["name"])}</td>
-              <td><code>{h(device["ip"])}</code></td>
-              <td>{h(lan_text)}</td>
-              <td>{h("Online" if device["online"] else "Offline")}</td>
-              <td>{action}</td>
-            </tr>"""
-        )
-
-    default_action = (
-        '<span class="tag">DEFAULT</span>'
-        if p["default"]
-        else action_form("/default", {"profile": p["name"]}, "Make default")
-    )
-    sync = action_form("/sync", {"profile": p["name"]}, "Sync")
-    gravity = action_form("/sync-gravity", {"profile": p["name"]}, "Sync + refresh lists")
-    notice = ""
-    if message:
-        cls = "notice error" if error else "notice"
-        notice = f'<div class="{cls}">{h(message)}</div>'
-
-    proxy_checked = " checked" if p["proxy_enabled"] else ""
-    live_description = live_group_description(p["name"])
-    suggested_port, suggested_ip = next_proxy_slot(p["name"])
-    theme_picker = theme_form(theme, f"/profile?name={quote(p['name'])}")
-    proxy_info = ""
-    if p["proxy_enabled"]:
-        info = proxy_runtime_info(p)
-        proxy_info = f"""<details class="card">
-          <summary>Endpoint / runtime info</summary>
-          <p><strong>Container:</strong> <code>{h(info["label"])}</code> ({h(info["state"])})</p>
-          <p><strong>Preferred host:</strong> <code>{h(info["hostname"])}:{h(p["proxy_port"])}</code></p>
-          <p><strong>LAN:</strong> <code>{h(info["lan_ip"])}:{h(p["proxy_port"])}</code><br>
-          <strong>Tailscale:</strong> <code>{h(info["tail_ip"])}:{h(p["proxy_port"])}</code></p>
-          <div class="hint">The reservation does not start Arachnidium or force clients through it.</div>
-        </details>"""
-
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{h(p["name"])} - pihm-web</title>
-<style>
-{theme_css(theme)}
-* {{ box-sizing:border-box; }}
-body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }}
-main {{ max-width:1000px; margin:0 auto; padding:24px; }}
-h1 {{ margin:0 0 4px; }}
-h2 {{ margin:28px 0 10px; }}
-a {{ color:var(--text); }}
-.card {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-top:12px; }}
-.actions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }}
-.muted,.hint {{ color:var(--muted); }}
-.hint {{ font-size:12px; }}
-.tag {{ font-size:11px; border:1px solid var(--accent); color:var(--accent); padding:2px 6px; border-radius:999px; }}
-.notice {{ margin:18px 0; padding:12px; border:1px solid var(--accent); border-radius:8px; }}
-.notice.error {{ border-color:var(--danger); color:var(--danger); }}
-input,select,textarea,button,.button {{ background:var(--control); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }}
-input[type=checkbox] {{ min-width:0; }}
-textarea {{ width:100%; min-height:110px; resize:vertical; }}
-button,.button {{ cursor:pointer; text-decoration:none; display:inline-block; }}
-button:hover,.button:hover {{ border-color:var(--accent); }}
-.check {{ display:block; padding:6px 0; }}
-.grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }}
-.table-wrap {{ overflow:auto; border:1px solid var(--line); border-radius:10px; }}
-table {{ width:100%; border-collapse:collapse; }}
-th,td {{ text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); }}
-tr:last-child td {{ border-bottom:0; }}
-form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
-code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
-pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
-</style>
-</head>
-<body>
-<main>
-  <div class="actions" style="justify-content:space-between">
-    <a href="/">← Back</a>
-    {theme_picker}
-  </div>
-  <h1>{h(p["name"])}</h1>
-  <div class="muted">Edit saved profile settings, then sync when ready.</div>
-  {notice}
-
-  <form method="post" action="/profile/rename" class="card">
-    <input type="hidden" name="csrf" value="{h(CSRF)}">
-    <input type="hidden" name="profile" value="{h(p["name"])}">
-    <div class="actions">
-      <input name="name" value="{h(p["name"])}" required>
-      <button type="submit">Rename profile</button>
-    </div>
-    <div class="hint">Renaming also renames the live Pi-hole group when it exists and creates backups first.</div>
-  </form>
-
-  <div class="actions">{default_action}{sync}{gravity}</div>
-
-  <form method="post" action="/profile/save">
-    <input type="hidden" name="csrf" value="{h(CSRF)}">
-    <input type="hidden" name="profile" value="{h(p["name"])}">
-
-    <h2>Description</h2>
-    <input name="description" value="{h(p["description"])}" style="width:100%" required>
-    <div class="hint">Live Pi-hole description: {h(live_description or "none")}</div>
-
-    <h2>Blocklists</h2>
-    <div class="card">{''.join(checks) or '<div class="muted">No catalog entries found.</div>'}</div>
-
-    <div class="grid">
-      <div>
-        <h2>Extra blocklist URLs</h2>
-        <textarea name="extra_urls">{h(chr(10).join(p["extra_urls"]))}</textarea>
-      </div>
-      <div>
-        <h2>Allowed domains</h2>
-        <textarea name="allow">{h(chr(10).join(p["allow"]))}</textarea>
-      </div>
-      <div>
-        <h2>Denied domains</h2>
-        <textarea name="deny">{h(chr(10).join(p["deny"]))}</textarea>
-      </div>
-      <div>
-        <h2>Blocked TLDs</h2>
-        <textarea name="tlds">{h(chr(10).join(p["tlds"]))}</textarea>
-      </div>
-    </div>
-
-    <div class="actions"><button type="submit">Save profile</button></div>
-  </form>
-    <form method="post" action="/profile/restore-description" class="inline" style="margin-top:8px">
-    <input type="hidden" name="csrf" value="{h(CSRF)}">
-    <input type="hidden" name="profile" value="{h(p["name"])}">
-    <button type="submit">Restore description from Pi-hole</button>
-  </form>
-
-
-  <h2>Link a device</h2>
-  <div class="hint">This matches the TUI workflow: the Tailscale address is linked and a LAN IPv4 is added automatically only when pihm can identify it confidently.</div>
-  {('<div class="table-wrap"><table><thead><tr><th>Device</th><th>Tailscale IPv4</th><th>LAN match</th><th>Status</th><th></th></tr></thead><tbody>' + ''.join(link_rows) + '</tbody></table></div>') if link_rows else '<div class="card muted">No local-tailnet devices discovered.</div>'}
-  <form method="post" action="/profile/link-local-device-name" class="card">
-    <input type="hidden" name="csrf" value="{h(CSRF)}">
-    <input type="hidden" name="profile" value="{h(p["name"])}">
-    <div class="actions">
-      <input name="device" placeholder="Tailscale or MagicDNS name" required>
-      <button type="submit">Find, link + sync</button>
-    </div>
-  </form>
-
-  <h2>Clients</h2>
-  <div class="hint">Editing or deleting a row changes the saved profile. Sync when ready. Add + sync applies immediately.</div>
-  {('<div class="table-wrap"><table><thead><tr><th>Address / label</th><th></th></tr></thead><tbody>' + ''.join(clients) + '</tbody></table></div>') if clients else '<div class="card muted">No explicit client addresses.</div>'}
-  <div class="card">
-    <form method="post" action="/assign">
-      <input type="hidden" name="csrf" value="{h(CSRF)}">
-      <input type="hidden" name="profile" value="{h(p["name"])}">
-      <div class="actions">
-        <input name="address" placeholder="Client IPv4/IPv6" required>
-        <input name="label" placeholder="Optional label">
-        <button type="submit">Add + sync</button>
-      </div>
-    </form>
-  </div>
-
-  <h2>Arachnidium endpoint</h2>
-  <form method="post" action="/profile/proxy" class="card">
-    <input type="hidden" name="csrf" value="{h(CSRF)}">
-    <input type="hidden" name="profile" value="{h(p["name"])}">
-    <label><input type="checkbox" name="enabled" value="1"{proxy_checked}> Enable reserved endpoint</label>
-    <div class="actions">
-      <input name="port" value="{h(p["proxy_port"] or suggested_port)}" placeholder="Port, e.g. 18101">
-      <input name="docker_ip" value="{h(p["proxy_ip"] or suggested_ip)}" placeholder="Docker IP">
-      <input name="label" value="{h(p["proxy_label"])}" placeholder="Container label">
-      <button type="submit">Save endpoint</button>
-    </div>
-    <div class="hint">This only reserves profile metadata. It does not deploy or force Arachnidium.</div>
-  </form>
-  {proxy_info}
-
-  <h2>Raw profile</h2>
-  <details class="card">
-    <summary>View INI</summary>
-    <pre><code>{h(p["path"].read_text(encoding="utf-8"))}</code></pre>
-  </details>
-
-  <h2>Clone profile</h2>
-  <form method="post" action="/profile/clone" class="card">
-    <input type="hidden" name="csrf" value="{h(CSRF)}">
-    <input type="hidden" name="profile" value="{h(p["name"])}">
-    <div class="actions">
-      <input name="name" placeholder="New profile name" required>
-      <button type="submit">Clone</button>
-    </div>
-  </form>
-</main>
+{''.join(modals)}
+<script>{dashboard_script()}</script>
 </body>
 </html>"""
 
