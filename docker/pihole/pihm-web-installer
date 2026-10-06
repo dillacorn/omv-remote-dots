@@ -43,7 +43,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
     rm -f "$HOME/pihm-web" "$HOME/pihm-web-installer"
     systemctl daemon-reload
     printf 'Removed pihm-web program/service files.\n'
-    printf 'Preserved %s so credentials/settings are not silently destroyed.\n' "$ENV_FILE"
+    printf 'Preserved %s and /var/lib/pihm-web so settings are not silently destroyed.\n' "$ENV_FILE"
     exit 0
 fi
 
@@ -64,6 +64,17 @@ curl -fsSL "$RAW_BASE/pihm-web-installer" -o "$stage/pihm-web-installer"
 
 python3 -m py_compile "$stage/pihm-web"
 bash -n "$stage/pihm-web-installer"
+
+stamp="$(date '+%Y%m%d-%H%M%S')"
+for target in pihm-web pihm-web-installer; do
+    if [[ -e "$HOME/$target" ]] && ! cmp -s "$stage/$target" "$HOME/$target"; then
+        cp -a -- "$HOME/$target" "$HOME/${target}.backup-${stamp}"
+        printf 'Backup: %s\n' "$HOME/${target}.backup-${stamp}"
+    fi
+done
+if [[ -e "$SERVICE_FILE" ]]; then
+    cp -a -- "$SERVICE_FILE" "${SERVICE_FILE}.backup-${stamp}"
+fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
     umask 077
