@@ -27,6 +27,7 @@ FILES=(
   profile-catalog.ini
   profile.example.ini
   pihm-installer
+  pihm-web-installer
 )
 
 die() {
@@ -50,8 +51,18 @@ case "$ACTION" in
 esac
 
 if [[ "$ACTION" == "uninstall" ]]; then
-  rm -f "$BINDIR/$COMMAND" "$BINDIR/pihm-installer"
-  rm -f     "$DEST/pihole-profile-manager"     "$DEST/pihole-profile-tui"     "$DEST/profile-catalog.ini"     "$DEST/profile.example.ini"     "$DEST/pihm-installer"
+  if [[ -e /etc/systemd/system/pihm-web.service || -e "$DEST/pihm-web" ]]; then
+    die "pihm-web is installed. Remove it first with: pihm-web-installer uninstall"
+  fi
+
+  rm -f "$BINDIR/$COMMAND" "$BINDIR/pihm-installer" "$BINDIR/pihm-web-installer"
+  rm -f \
+    "$DEST/pihole-profile-manager" \
+    "$DEST/pihole-profile-tui" \
+    "$DEST/profile-catalog.ini" \
+    "$DEST/profile.example.ini" \
+    "$DEST/pihm-installer" \
+    "$DEST/pihm-web-installer"
 
   printf 'Removed pihm program files and command links.\n'
   printf 'Preserved Pi-hole data, gravity.db, profiles.d, backups, and Compose files.\n'
@@ -84,7 +95,8 @@ if [[ "$ACTION" == "install" &&
       -f "$SCRIPT_DIR/pihole-profile-tui" &&
       -f "$SCRIPT_DIR/profile-catalog.ini" &&
       -f "$SCRIPT_DIR/profile.example.ini" &&
-      -f "$SCRIPT_DIR/pihm-installer" ]]; then
+      -f "$SCRIPT_DIR/pihm-installer" &&
+      -f "$SCRIPT_DIR/pihm-web-installer" ]]; then
   LOCAL_SOURCE=1
 else
   need curl
@@ -118,10 +130,10 @@ done
 
 python3 -m py_compile   "$stage/pihole-profile-manager"   "$stage/pihole-profile-tui"
 
-bash -n "$stage/pihm-installer"
+bash -n "$stage/pihm-installer" "$stage/pihm-web-installer"
 
 stamp="$(date '+%Y%m%d-%H%M%S')"
-for f in pihole-profile-manager pihole-profile-tui profile-catalog.ini profile.example.ini pihm-installer; do
+for f in pihole-profile-manager pihole-profile-tui profile-catalog.ini profile.example.ini pihm-installer pihm-web-installer; do
   if [[ -e "$DEST/$f" ]] && ! cmp -s "$stage/$f" "$DEST/$f"; then
     cp -a -- "$DEST/$f" "$DEST/${f}.backup-${stamp}"
     printf 'Backup: %s\n' "$DEST/${f}.backup-${stamp}"
@@ -133,13 +145,17 @@ install -m 0755 "$stage/pihole-profile-tui" "$DEST/pihole-profile-tui"
 install -m 0644 "$stage/profile-catalog.ini" "$DEST/profile-catalog.ini"
 install -m 0644 "$stage/profile.example.ini" "$DEST/profile.example.ini"
 install -m 0755 "$stage/pihm-installer" "$DEST/pihm-installer"
+install -m 0755 "$stage/pihm-web-installer" "$DEST/pihm-web-installer"
 
 ln -sfn "$DEST/pihole-profile-manager" "$BINDIR/$COMMAND"
 ln -sfn "$DEST/pihm-installer" "$BINDIR/pihm-installer"
+ln -sfn "$DEST/pihm-web-installer" "$BINDIR/pihm-web-installer"
 
 printf '\nInstalled successfully.\n'
 printf 'Run the TUI from anywhere with:\n\n'
 printf '  %s\n\n' "$COMMAND"
 printf 'Future updates are built into the TUI:\n\n'
 printf '  pihm -> Update pihm\n\n'
+printf 'Optional browser UI management is available in:\n\n'
+printf '  pihm -> Web interface\n\n'
 printf 'Profile files remain in: %s/profiles.d\n' "$DEST"
