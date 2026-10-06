@@ -958,6 +958,82 @@ def proxy_screen():
             proxy_editor(p["path"])
 
 
+def pihm_web_installer():
+    candidates=[
+        Path("/usr/local/bin/pihm-web-installer"),
+        MANAGER.with_name("pihm-web-installer"),
+    ]
+    return next((p for p in candidates if p.is_file()),None)
+
+
+def pihm_web_access_text():
+    e=envfile(Path("/etc/pihm-web.env"))
+    port=e.get("PIHM_WEB_PORT","8091").strip() or "8091"
+    _,lan,_=detected_proxy_addresses()
+    return f"""pihm-web listens only on the OMV host by default.
+
+From another Linux/macOS machine:
+
+  ssh -o ExitOnForwardFailure=yes -N -L {port}:127.0.0.1:{port} root@{lan}
+
+Leave that terminal running, then open:
+
+  http://127.0.0.1:{port}
+
+Login:
+  username: admin
+  password: your existing Pi-hole web password
+
+The service stays separate from the pihm TUI.
+"""
+
+
+def web_interface():
+    while True:
+        installer=pihm_web_installer()
+        installed=Path("/etc/systemd/system/pihm-web.service").exists() and MANAGER.with_name("pihm-web").is_file()
+        state=command_output(["systemctl","is-active","pihm-web.service"]) if installed else "not installed"
+        if not state:
+            state="unknown"
+        if installed:
+            items=[
+                "Update web interface",
+                f"Service status       {state}",
+                "Restart web interface",
+                "Access instructions",
+                "Remove web interface",
+                "Back",
+            ]
+        else:
+            items=[
+                "Install web interface",
+                "Access instructions",
+                "Back",
+            ]
+        c=menu("Web interface",items,f"Optional pihm-web browser UI. Current state: {state}")
+        if c is None or c==len(items)-1:
+            return
+        if installer is None:
+            show_text("Web interface","pihm-web-installer was not found. Update or reinstall pihm first.")
+            continue
+        if not installed:
+            if c==0:
+                external("Install pihm-web",lambda:subprocess.run([str(installer),"install"],check=True))
+            elif c==1:
+                show_text("pihm-web access",pihm_web_access_text())
+            continue
+        if c==0:
+            external("Update pihm-web",lambda:subprocess.run([str(installer),"update"],check=True))
+        elif c==1:
+            external("pihm-web status",lambda:subprocess.run(["systemctl","status","pihm-web.service","--no-pager"],check=False))
+        elif c==2:
+            external("Restart pihm-web",lambda:subprocess.run(["systemctl","restart","pihm-web.service"],check=True))
+        elif c==3:
+            show_text("pihm-web access",pihm_web_access_text())
+        elif c==4 and confirm("Remove pihm-web? pihm and Pi-hole will remain installed."):
+            external("Remove pihm-web",lambda:subprocess.run([str(installer),"uninstall"],check=True))
+
+
 def update_pihm():
     candidates=[
         Path("/usr/local/bin/pihm-installer"),
@@ -1063,8 +1139,8 @@ pihm reads your Tailscale device list and lets you choose a device by name.
 You can also type its Tailscale name or full MagicDNS name.
 
 Example:
-  dillons-s24-1
-  dillons-s24-1.time-puffin.ts.net
+  phone
+  phone.example-tailnet.ts.net
 
 pihm automatically adds the device's Tailscale 100.x address.
 
@@ -1225,13 +1301,14 @@ def main():
     if not sys.stdin.isatty() or not sys.stdout.isatty(): print("ERROR: interactive terminal required",file=sys.stderr); return 2
     M["PROFILES"].mkdir(parents=True,exist_ok=True)
     while True:
-        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / sync","Arachnidium proxies configure / connection info","Maintenance         blocklist updates / status","Update pihm         fetch latest from main","Help","Quit"])
-        if c is None or c==5: clear(); return 0
+        c=menu("Pi-hole Profile Manager",["Profiles            create / customize / sync","Arachnidium proxies configure / connection info","Maintenance         blocklist updates / status","Web interface        optional browser UI","Update pihm         fetch latest from main","Help","Quit"])
+        if c is None or c==6: clear(); return 0
         if c==0: profiles_menu()
         elif c==1: proxy_screen()
         elif c==2: maintenance()
-        elif c==3: update_pihm()
-        elif c==4: help_screen()
+        elif c==3: web_interface()
+        elif c==4: update_pihm()
+        elif c==5: help_screen()
 
 
 if __name__=="__main__": raise SystemExit(main())
