@@ -802,44 +802,36 @@ def address_matches_client(address: str, client_ip: str) -> bool:
 def recent_dns_clients() -> list[dict]:
     if not FTL_DB.is_file():
         return []
+
     cutoff = int(time.time()) - ACTIVE_CLIENT_WINDOW
     try:
         db = sqlite3.connect(f"file:{FTL_DB}?mode=ro", uri=True)
         db.row_factory = sqlite3.Row
-        objects = {
-            r[0]
-            for r in db.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
-            )
-        }
-        if "queries" not in objects:
-            db.close()
-            return []
-        cols = {r[1] for r in db.execute("PRAGMA table_info(queries)")}
-        if not {"timestamp", "client"}.issubset(cols):
-            db.close()
-            return []
         rows = db.execute(
             "SELECT client, MAX(timestamp) AS last_seen, COUNT(*) AS query_count "
             "FROM queries WHERE timestamp >= ? GROUP BY client",
             (cutoff,),
         ).fetchall()
         db.close()
-    except Exception:
+    except Exception as exc:
+        print(f"pihm-web: recent DNS query failed: {exc}", file=sys.stderr)
         return []
 
     out = []
     for row in rows:
         value = str(row["client"] or "").strip()
+        if not value:
+            continue
         try:
-            ipaddress.ip_address(value)
+            ip = ipaddress.ip_address(value)
         except ValueError:
             continue
         out.append({
-            "ip": value,
+            "ip": str(ip),
             "last_seen": int(row["last_seen"] or 0),
             "queries": int(row["query_count"] or 0),
         })
+
     return sorted(out, key=lambda item: (-item["last_seen"], item["ip"]))
 
 
