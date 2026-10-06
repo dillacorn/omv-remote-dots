@@ -131,7 +131,7 @@ for f in "${FILES[@]}"; do
     }
     cp -- "$SCRIPT_DIR/$f" "$stage/$f"
   else
-    curl -fsSL "$RAW_BASE/$f" -o "$stage/$f"
+    curl -fsSL -H 'Cache-Control: no-cache' "$RAW_BASE/$f" -o "$stage/$f"
   fi
 done
 
