@@ -96,7 +96,7 @@ Running `/docker/pihole/pihole-profile-manager` with no arguments opens the same
 
 Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, held arrow keys repeat, Enter selects or toggles, `h` opens Help from any menu, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
 
-The TUI can create Normal/Strict/Parental/blank profiles, clone profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, update `pihm` itself, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT configured]` or `[no proxy]`. `[no proxy]` means the Pi-hole policy exists but no Arachnidium endpoint has been configured for it yet.
+The TUI can create, rename, and clone Normal/Strict/Parental/blank profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, update `pihm` itself, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT configured]` or `[no proxy]`. `[no proxy]` means the Pi-hole policy exists but no Arachnidium endpoint has been configured for it yet.
 
 On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/profiles.d/` without changing them.
 
@@ -251,7 +251,7 @@ Both addresses select the same Pi-hole policy. The LAN address is used when the 
 
 `pihm-web` is an optional browser interface for the same profile data managed by `pihm`.
 
-It supports normal profile creation/editing, client assignment, recent DNS-client activity, sync/refresh operations, maintenance controls, and optional read-only discovery from additional Tailscale tailnets.
+It supports the normal TUI management set: profile create/rename/clone/edit, client linking and editing, Default fallback, Arachnidium endpoint/runtime information, sync/refresh operations, maintenance controls, pihm updates, and raw-profile inspection. It also adds recent DNS-client activity, optional read-only discovery from additional Tailscale tailnets, and browser-local Awtarchy-style themes.
 
 The TUI remains supported and independent.
 
