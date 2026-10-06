@@ -285,7 +285,6 @@ def rename_profile(name,new_name,cat):
                         (f"Default policy mirrors {new_name}",ts()),
                     )
             db.close()
-            reload(False)
     except BaseException:
         if new_path!=p["path"]:
             new_path.unlink(missing_ok=True)
