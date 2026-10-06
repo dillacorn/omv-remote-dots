@@ -1067,7 +1067,12 @@ def update_pihm():
 
     clear()
     print(f"{BOLD}Update pihm{RESET}\n")
-    print("Fetching and installing the latest files from omv-remote-dots main...\n")
+    source_ref_file=MANAGER.parent/".pihm-source-ref"
+    try:
+        source_ref=source_ref_file.read_text(encoding="utf-8").strip() or "main"
+    except OSError:
+        source_ref="main"
+    print(f"Fetching and installing the latest files from omv-remote-dots {source_ref}...\n")
     try:
         subprocess.run([str(installer),"update"],check=True)
     except subprocess.CalledProcessError as e:
