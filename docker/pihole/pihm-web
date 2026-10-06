@@ -26,6 +26,7 @@ HOME = Path(os.environ.get("PIHM_HOME", "/docker/pihole"))
 MANAGER = Path(os.environ.get("PIHOLE_PROFILE_MANAGER", str(HOME / "pihole-profile-manager")))
 PROFILES = Path(os.environ.get("PIHOLE_PROFILES_DIR", str(HOME / "profiles.d")))
 FTL_DB = Path(os.environ.get("PIHOLE_FTL_DB", str(HOME / "etc-pihole/pihole-FTL.db")))
+GRAVITY_DB = Path(os.environ.get("PIHOLE_PROFILE_DB", str(HOME / "etc-pihole/gravity.db")))
 CATALOG = Path(os.environ.get("PIHOLE_PROFILE_CATALOG", str(HOME / "profile-catalog.ini")))
 
 BIND = os.environ.get("PIHM_WEB_BIND", "127.0.0.1")
@@ -728,6 +729,38 @@ def manager(*args: str) -> None:
     run_checked([str(MANAGER), *args])
 
 
+def import_current_groups() -> list[str]:
+    if not GRAVITY_DB.is_file():
+        fail(f"gravity database not found: {GRAVITY_DB}")
+    db = sqlite3.connect(f"file:{GRAVITY_DB}?mode=ro", uri=True)
+    try:
+        names = [
+            str(row[0])
+            for row in db.execute('SELECT name FROM "group" WHERE id<>0 ORDER BY id')
+        ]
+    finally:
+        db.close()
+    existing = {p["name"].casefold() for p in profiles()}
+    imported = []
+    for name in names:
+        if name.casefold() in existing:
+            continue
+        manager("capture", name)
+        imported.append(name)
+        existing.add(name.casefold())
+    return imported
+
+
+def timer_state() -> str:
+    enabled = run(["systemctl", "is-enabled", "pihole-gravity-daily.timer"])
+    active = run(["systemctl", "is-active", "pihole-gravity-daily.timer"])
+    if enabled == "enabled" and active == "active":
+        return "enabled and active"
+    if enabled == "enabled":
+        return "enabled"
+    return "disabled"
+
+
 def valid_profile(name: str) -> bool:
     return any(p["name"] == name for p in profiles())
 
@@ -938,6 +971,7 @@ def render(message: str = "", error: bool = False) -> str:
         )
 
     default_name = next((p["name"] for p in ps if p["default"]), "Not configured")
+    gravity_timer = timer_state()
     notice = ""
     if message:
         cls = "notice error" if error else "notice"
@@ -1032,6 +1066,17 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
 
   <h2>Tailscale clients</h2>
   {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet</th><th>Tailscale IPv4</th><th>Status</th><th>Profile</th></tr></thead><tbody>' + ''.join(tail_rows) + '</tbody></table></div>') if tail_rows else '<div class="empty">No unassigned Tailscale clients currently discovered.</div>'}
+
+  <h2>Maintenance</h2>
+  <div class="card">
+    <div class="status">Daily blocklist timer: <strong>{h(gravity_timer)}</strong></div>
+    <div class="actions">
+      {action_form("/maintenance/gravity", {}, "Refresh blocklists now")}
+      {action_form("/maintenance/timer-enable", {}, "Enable daily updates")}
+      {action_form("/maintenance/timer-disable", {}, "Disable daily updates")}
+      {action_form("/maintenance/import-groups", {}, "Import current Pi-hole groups")}
+    </div>
+  </div>
 
   <h2>Secondary tailnets</h2>
   <div class="status">Optional read-only device discovery for other tailnets. Use a Tailscale OAuth client with Devices/Core Read permission.</div>
@@ -1298,6 +1343,29 @@ class Handler(BaseHTTPRequestHandler):
 
             path = urlparse(self.path).path
 
+            if path == "/maintenance/gravity":
+                manager("gravity")
+                self.redirect("Blocklists refreshed")
+                return
+
+            if path == "/maintenance/timer-enable":
+                manager("timer", "install")
+                self.redirect("Daily blocklist updates enabled")
+                return
+
+            if path == "/maintenance/timer-disable":
+                manager("timer", "remove")
+                self.redirect("Daily blocklist updates disabled")
+                return
+
+            if path == "/maintenance/import-groups":
+                imported = import_current_groups()
+                if imported:
+                    self.redirect("Imported: " + ", ".join(imported))
+                else:
+                    self.redirect("No new Pi-hole groups to import")
+                return
+
             if path == "/profile/create":
                 name = form_one(data, "name").strip()[:120]
                 preset = form_one(data, "preset").strip()
@@ -1453,6 +1521,10 @@ def check() -> int:
         problems.append(f"missing profiles directory: {PROFILES}")
     if not FTL_DB.is_file():
         problems.append(f"missing Pi-hole FTL database: {FTL_DB}")
+    if not GRAVITY_DB.is_file():
+        problems.append(f"missing Pi-hole gravity database: {GRAVITY_DB}")
+    if not CATALOG.is_file():
+        problems.append(f"missing pihm catalog: {CATALOG}")
     api_url = ""
     if AUTH_SOURCE not in {"pihole", "custom"}:
         problems.append("PIHM_WEB_AUTH_SOURCE must be pihole or custom")
@@ -1474,6 +1546,8 @@ def check() -> int:
     print(f"Manager:  {MANAGER}")
     print(f"Profiles: {PROFILES}")
     print(f"FTL DB:   {FTL_DB}")
+    print(f"Gravity:  {GRAVITY_DB}")
+    print(f"Catalog:  {CATALOG}")
     print(f"Bind:     {BIND}:{PORT}")
     print(f"Auth:     {AUTH_SOURCE}")
     if AUTH_SOURCE == "pihole":
