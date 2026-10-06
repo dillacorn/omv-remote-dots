@@ -176,9 +176,9 @@ Do not mix Arachnidium troubleshooting into normal Pi-hole DNS troubleshooting u
 
 pihm-web is optional and must remain separate from the pihm TUI. Do not make the TUI depend on the web service.
 
-The web interface should cover normal pihm/TUI management so browser users are not forced back to SSH for profile administration. Do not clone unrelated Pi-hole administration features that pihm itself does not own.
+The web interface should cover normal pihm/TUI management so browser users are not forced back to SSH for profile administration. When a new profile-management action is added, audit both TUI and web parity. Do not clone unrelated Pi-hole administration features that pihm itself does not own.
 
-Web mutations should reuse pihm/pihole-profile-manager operations so database backups, profile ownership, Default fallback behavior, and Pi-hole reload behavior stay centralized.
+Shared operations that change live Pi-hole identity/state, such as profile rename, should live in `pihole-profile-manager` and be called by both TUI and web. Web mutations should reuse pihm/pihole-profile-manager operations so database backups, profile ownership, Default fallback behavior, and Pi-hole reload behavior stay centralized.
 
 The web backend is localhost-only by default. Do not expose it publicly or enable Tailscale Funnel. Any Tailscale Serve integration must be opt-in and must inspect existing Serve configuration before changing it.
 
@@ -187,6 +187,8 @@ Do not put the Docker socket inside a pihm-web container. The initial implementa
 For LAN client assignments, display a discovered MAC address when available, but keep the stable LAN IPv4 address as the Pi-hole client identity. Recommend a router DHCP reservation for that IPv4/MAC pair before treating the assignment as permanent.
 
 Recent-client counts should come from Pi-hole query history and be described as DNS source addresses, not guaranteed physical-device counts. Unassigned querying addresses inherit the selected pihm Default fallback.
+
+Browser themes are presentation-only. Keep them browser-local and do not couple theme selection to Pi-hole, pihm profile state, or the host desktop theme. The current theme families mirror Awtarchy's managed palettes.
 
 ### Secondary tailnets
 
