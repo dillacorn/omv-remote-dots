@@ -18,6 +18,8 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, quote, urlparse
 
 HOME = Path(os.environ.get("PIHM_HOME", "/docker/pihole"))
@@ -31,8 +33,8 @@ USERNAME = os.environ.get("PIHM_WEB_USERNAME", "admin")
 AUTH_SOURCE = os.environ.get("PIHM_WEB_AUTH_SOURCE", "pihole").strip().lower() or "pihole"
 PASSWORD_OVERRIDE = os.environ.get("PIHM_WEB_PASSWORD", "")
 PIHOLE_CONTAINER = os.environ.get("PIHOLE_CONTAINER", "pihole")
+PIHOLE_API_URL = os.environ.get("PIHM_WEB_PIHOLE_API_URL", "").strip()
 ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
-AUTH_PASSWORD = ""
 CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 16 * 1024
 
@@ -57,27 +59,87 @@ def run_checked(argv: list[str], timeout: int = 45) -> None:
     subprocess.run(argv, check=True, timeout=timeout)
 
 
-def pihole_web_password() -> str:
-    raw = run(["docker", "inspect", PIHOLE_CONTAINER, "--format", "{{json .Config.Env}}"])
+def pihole_api_auth_url() -> str:
+    if PIHOLE_API_URL:
+        base = PIHOLE_API_URL.rstrip("/")
+        return base if base.endswith("/api/auth") else f"{base}/api/auth"
+
+    raw = run(["docker", "inspect", PIHOLE_CONTAINER])
     if not raw:
         return ""
+
     try:
-        env = json.loads(raw)
+        items = json.loads(raw)
+        info = items[0] if isinstance(items, list) and items else {}
     except Exception:
         return ""
-    prefix = "FTLCONF_webserver_api_password="
-    for entry in env if isinstance(env, list) else []:
-        if isinstance(entry, str) and entry.startswith(prefix):
-            return entry[len(prefix):]
+
+    network = info.get("NetworkSettings", {}) if isinstance(info, dict) else {}
+    bindings = network.get("Ports", {}).get("80/tcp") or []
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        host_port = str(binding.get("HostPort") or "").strip()
+        if not host_port:
+            continue
+        host_ip = str(binding.get("HostIp") or "").strip()
+        if host_ip in {"", "0.0.0.0", "::"}:
+            host_ip = "127.0.0.1"
+        host = f"[{host_ip}]" if ":" in host_ip else host_ip
+        return f"http://{host}:{host_port}/api/auth"
+
+    candidates = []
+    direct_ip = str(network.get("IPAddress") or "").strip()
+    if direct_ip:
+        candidates.append(direct_ip)
+    for data in (network.get("Networks") or {}).values():
+        if isinstance(data, dict):
+            value = str(data.get("IPAddress") or "").strip()
+            if value:
+                candidates.append(value)
+
+    if candidates:
+        return f"http://{candidates[0]}:80/api/auth"
     return ""
 
 
-def effective_password() -> str:
-    if AUTH_SOURCE == "pihole":
-        return pihole_web_password()
-    if AUTH_SOURCE == "custom":
-        return PASSWORD_OVERRIDE
-    return ""
+def pihole_password_valid(password: str) -> bool:
+    url = pihole_api_auth_url()
+    if not url:
+        return False
+
+    payload = json.dumps({"password": password}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if response.status != HTTPStatus.OK:
+                return False
+            body = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return False
+
+    session = body.get("session", {}) if isinstance(body, dict) else {}
+    valid = session.get("valid") is True
+    sid = str(session.get("sid") or "").strip()
+
+    if sid:
+        logout = urllib.request.Request(
+            url,
+            method="DELETE",
+            headers={"X-FTL-SID": sid},
+        )
+        try:
+            urllib.request.urlopen(logout, timeout=5).close()
+        except Exception:
+            pass
+
+    return valid
 
 
 def load_profile(path: Path) -> dict:
@@ -350,13 +412,19 @@ def auth_ok(header: str | None) -> bool:
     except Exception:
         return False
 
-    return (
-        hmac.compare_digest(user, USERNAME)
-        and hmac.compare_digest(
+    if not hmac.compare_digest(user, USERNAME):
+        return False
+
+    if AUTH_SOURCE == "pihole":
+        return pihole_password_valid(password)
+
+    if AUTH_SOURCE == "custom":
+        return hmac.compare_digest(
             hashlib.sha256(password.encode()).digest(),
-            hashlib.sha256(AUTH_PASSWORD.encode()).digest(),
+            hashlib.sha256(PASSWORD_OVERRIDE.encode()).digest(),
         )
-    )
+
+    return False
 
 
 def profile_options(current: str = "") -> str:
@@ -695,14 +763,15 @@ def check() -> int:
         problems.append(f"missing profiles directory: {PROFILES}")
     if not FTL_DB.is_file():
         problems.append(f"missing Pi-hole FTL database: {FTL_DB}")
-    password = effective_password()
+    api_url = ""
     if AUTH_SOURCE not in {"pihole", "custom"}:
         problems.append("PIHM_WEB_AUTH_SOURCE must be pihole or custom")
-    elif not password:
-        if AUTH_SOURCE == "pihole":
-            problems.append(f"Pi-hole web password was not found in container {PIHOLE_CONTAINER}")
-        else:
-            problems.append("PIHM_WEB_PASSWORD is not set for custom auth")
+    elif AUTH_SOURCE == "pihole":
+        api_url = pihole_api_auth_url()
+        if not api_url:
+            problems.append(f"Pi-hole API endpoint could not be found for container {PIHOLE_CONTAINER}")
+    elif not PASSWORD_OVERRIDE:
+        problems.append("PIHM_WEB_PASSWORD is not set for custom auth")
     if not bind_is_loopback() and not ALLOW_REMOTE_BIND:
         problems.append("non-loopback bind requires PIHM_WEB_ALLOW_REMOTE_BIND=1")
 
@@ -717,6 +786,8 @@ def check() -> int:
     print(f"FTL DB:   {FTL_DB}")
     print(f"Bind:     {BIND}:{PORT}")
     print(f"Auth:     {AUTH_SOURCE}")
+    if AUTH_SOURCE == "pihole":
+        print(f"Pi-hole API: {api_url}")
     return 0
 
 
@@ -728,15 +799,16 @@ def main() -> int:
     if args.check:
         return check()
 
-    global AUTH_PASSWORD
-    AUTH_PASSWORD = effective_password()
-    if not AUTH_PASSWORD:
-        if AUTH_SOURCE == "pihole":
-            print(f"ERROR: Pi-hole web password was not found in container {PIHOLE_CONTAINER}", file=sys.stderr)
-        elif AUTH_SOURCE == "custom":
-            print("ERROR: PIHM_WEB_PASSWORD must be set for custom auth", file=sys.stderr)
-        else:
-            print("ERROR: PIHM_WEB_AUTH_SOURCE must be pihole or custom", file=sys.stderr)
+    if AUTH_SOURCE not in {"pihole", "custom"}:
+        print("ERROR: PIHM_WEB_AUTH_SOURCE must be pihole or custom", file=sys.stderr)
+        return 2
+
+    if AUTH_SOURCE == "pihole" and not pihole_api_auth_url():
+        print(f"ERROR: Pi-hole API endpoint could not be found for container {PIHOLE_CONTAINER}", file=sys.stderr)
+        return 2
+
+    if AUTH_SOURCE == "custom" and not PASSWORD_OVERRIDE:
+        print("ERROR: PIHM_WEB_PASSWORD must be set for custom auth", file=sys.stderr)
         return 2
 
     if not MANAGER.is_file():
