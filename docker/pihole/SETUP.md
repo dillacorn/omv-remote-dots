@@ -40,7 +40,9 @@ Start the base stack:
 docker compose up -d
 ```
 
-## 2. Install pihm
+## 2. Optional: install pihm
+
+Pi-hole works without pihm. Install pihm when you want file-backed profiles, per-client policy management, or the optional browser UI.
 
 Install the Pi-hole profile manager:
 
@@ -54,6 +56,13 @@ Launch it:
 pihm
 ```
 
+Optional browser UI:
+
+```text
+Web interface
+-> Install web interface
+```
+
 For an existing Pi-hole configuration, use:
 
 ```text
@@ -63,7 +72,7 @@ Profiles
 
 For a new setup, create the profiles you want directly in `pihm`.
 
-## 3. Choose the fallback policy
+## 3. Choose the fallback policy (pihm)
 
 One profile can be the policy for otherwise-unassigned clients.
 
@@ -111,7 +120,7 @@ docker exec pihole pihole -t
 
 For per-device profiles, queries should normally appear from the client's LAN IPv4 address rather than only from the router.
 
-## 5. Add a device
+## 5. Add a device (pihm)
 
 Inside the target profile:
 
