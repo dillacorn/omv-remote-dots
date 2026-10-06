@@ -26,6 +26,7 @@ HOME = Path(os.environ.get("PIHM_HOME", "/docker/pihole"))
 MANAGER = Path(os.environ.get("PIHOLE_PROFILE_MANAGER", str(HOME / "pihole-profile-manager")))
 PROFILES = Path(os.environ.get("PIHOLE_PROFILES_DIR", str(HOME / "profiles.d")))
 FTL_DB = Path(os.environ.get("PIHOLE_FTL_DB", str(HOME / "etc-pihole/pihole-FTL.db")))
+CATALOG = Path(os.environ.get("PIHOLE_PROFILE_CATALOG", str(HOME / "profile-catalog.ini")))
 
 BIND = os.environ.get("PIHM_WEB_BIND", "127.0.0.1")
 PORT = int(os.environ.get("PIHM_WEB_PORT", "8091"))
@@ -166,12 +167,29 @@ def load_profile(path: Path) -> dict:
         if x.strip() and not x.lstrip().startswith(("#", ";"))
     ]
 
+    def values(section: str, option: str) -> list[str]:
+        return [
+            x.strip()
+            for x in cfg.get(section, option, fallback="").splitlines()
+            if x.strip() and not x.lstrip().startswith(("#", ";"))
+        ]
+
     return {
         "path": path,
         "name": name,
+        "description": cfg.get("profile", "description", fallback="Managed Pi-hole profile").strip(),
         "default": is_default,
         "clients": clients,
+        "keys": keys,
         "lists": len(keys),
+        "extra_urls": values("lists", "extra_urls"),
+        "allow": values("allow", "domains"),
+        "deny": values("deny", "domains"),
+        "tlds": values("deny", "tlds"),
+        "proxy_enabled": cfg.getboolean("proxy", "enabled", fallback=False),
+        "proxy_port": cfg.get("proxy", "port", fallback="").strip(),
+        "proxy_ip": cfg.get("proxy", "docker_ip", fallback="").strip(),
+        "proxy_label": cfg.get("proxy", "label", fallback="").strip(),
     }
 
 
@@ -184,6 +202,123 @@ def profiles() -> list[dict]:
         except Exception:
             continue
     return out
+
+
+def profile_by_name(name: str) -> dict:
+    matches = [p for p in profiles() if p["name"] == name]
+    if len(matches) != 1:
+        fail("profile not found")
+    return matches[0]
+
+
+def catalog_entries() -> dict[str, str]:
+    if not CATALOG.is_file():
+        return {}
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    try:
+        with CATALOG.open(encoding="utf-8") as fh:
+            cfg.read_file(fh)
+    except Exception:
+        return {}
+    out = {}
+    for key in cfg.sections():
+        comment = cfg.get(key, "comment", fallback=key).strip() or key
+        if cfg.get(key, "url", fallback="").strip():
+            out[key] = comment
+    return out
+
+
+def clean_lines(value: str) -> list[str]:
+    return [
+        line.strip()
+        for line in value.splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", ";"))
+    ]
+
+
+def write_profile_settings(
+    profile: dict,
+    description: str,
+    keys: list[str],
+    extra_urls: list[str],
+    allow: list[str],
+    deny: list[str],
+    tlds: list[str],
+) -> None:
+    known = catalog_entries()
+    bad = [key for key in keys if key not in known]
+    if bad:
+        fail("unknown blocklist keys: " + ", ".join(bad))
+    description = description.strip()
+    if not description:
+        fail("description cannot be empty")
+
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    with profile["path"].open(encoding="utf-8") as fh:
+        cfg.read_file(fh)
+
+    for section in ("profile", "lists", "allow", "deny"):
+        if not cfg.has_section(section):
+            cfg.add_section(section)
+
+    cfg.set("profile", "description", description)
+    cfg.set("lists", "keys", "\n" + "\n".join(keys))
+    cfg.set("lists", "extra_urls", "\n" + "\n".join(extra_urls))
+    cfg.set("allow", "domains", "\n" + "\n".join(allow))
+    cfg.set("deny", "domains", "\n" + "\n".join(deny))
+    cfg.set("deny", "tlds", "\n" + "\n".join(tlds))
+
+    import io
+    buf = io.StringIO()
+    cfg.write(buf)
+    profile["path"].write_text(buf.getvalue(), encoding="utf-8")
+
+
+def write_proxy_settings(
+    profile: dict,
+    enabled: bool,
+    port: str,
+    docker_ip: str,
+    label: str,
+) -> None:
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    with profile["path"].open(encoding="utf-8") as fh:
+        cfg.read_file(fh)
+    if not cfg.has_section("proxy"):
+        cfg.add_section("proxy")
+
+    if enabled:
+        if not port.isdigit() or not (1024 <= int(port) <= 65535):
+            fail("proxy port must be between 1024 and 65535")
+        try:
+            if ipaddress.ip_address(docker_ip).version != 4:
+                fail("proxy Docker IP must be IPv4")
+        except ValueError:
+            fail("proxy Docker IP must be valid IPv4")
+        for other in profiles():
+            if other["name"] == profile["name"] or not other["proxy_enabled"]:
+                continue
+            if str(other["proxy_port"]) == port:
+                fail(f"proxy port {port} is already used by {other['name']}")
+            if other["proxy_ip"] == docker_ip:
+                fail(f"proxy Docker IP {docker_ip} is already used by {other['name']}")
+        cfg.set("proxy", "enabled", "true")
+        cfg.set("proxy", "port", port)
+        cfg.set("proxy", "docker_ip", docker_ip)
+        cfg.set("proxy", "label", label.strip())
+    else:
+        cfg.set("proxy", "enabled", "false")
+        cfg.set("proxy", "port", "")
+        cfg.set("proxy", "docker_ip", "")
+        cfg.set("proxy", "label", "")
+
+    import io
+    buf = io.StringIO()
+    cfg.write(buf)
+    profile["path"].write_text(buf.getvalue(), encoding="utf-8")
 
 
 def rfc1918_ipv4(value: str) -> bool:
