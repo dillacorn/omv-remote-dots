@@ -2582,6 +2582,22 @@ def check() -> int:
     if not bind_is_loopback() and not ALLOW_REMOTE_BIND:
         problems.append("non-loopback bind requires PIHM_WEB_ALLOW_REMOTE_BIND=1")
 
+    if not problems:
+        try:
+            rendered = render(theme=DEFAULT_THEME)
+            required = (
+                'class="profile-grid"',
+                'id="add-device"',
+                'id="all-devices"',
+                'id="maintenance"',
+                'id="help"',
+            )
+            missing = [marker for marker in required if marker not in rendered]
+            if missing:
+                problems.append("dashboard render is missing required UI sections")
+        except Exception as exc:
+            problems.append(f"dashboard render failed: {exc}")
+
     if problems:
         for item in problems:
             print(f"ERROR: {item}")
