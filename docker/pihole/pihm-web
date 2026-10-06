@@ -28,8 +28,11 @@ FTL_DB = Path(os.environ.get("PIHOLE_FTL_DB", str(HOME / "etc-pihole/pihole-FTL.
 BIND = os.environ.get("PIHM_WEB_BIND", "127.0.0.1")
 PORT = int(os.environ.get("PIHM_WEB_PORT", "8091"))
 USERNAME = os.environ.get("PIHM_WEB_USERNAME", "admin")
-PASSWORD = os.environ.get("PIHM_WEB_PASSWORD", "")
+AUTH_SOURCE = os.environ.get("PIHM_WEB_AUTH_SOURCE", "pihole").strip().lower() or "pihole"
+PASSWORD_OVERRIDE = os.environ.get("PIHM_WEB_PASSWORD", "")
+PIHOLE_CONTAINER = os.environ.get("PIHOLE_CONTAINER", "pihole")
 ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
+AUTH_PASSWORD = ""
 CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 16 * 1024
 
@@ -52,6 +55,29 @@ def run(argv: list[str], timeout: int = 10) -> str:
 
 def run_checked(argv: list[str], timeout: int = 45) -> None:
     subprocess.run(argv, check=True, timeout=timeout)
+
+
+def pihole_web_password() -> str:
+    raw = run(["docker", "inspect", PIHOLE_CONTAINER, "--format", "{{json .Config.Env}}"])
+    if not raw:
+        return ""
+    try:
+        env = json.loads(raw)
+    except Exception:
+        return ""
+    prefix = "FTLCONF_webserver_api_password="
+    for entry in env if isinstance(env, list) else []:
+        if isinstance(entry, str) and entry.startswith(prefix):
+            return entry[len(prefix):]
+    return ""
+
+
+def effective_password() -> str:
+    if AUTH_SOURCE == "pihole":
+        return pihole_web_password()
+    if AUTH_SOURCE == "custom":
+        return PASSWORD_OVERRIDE
+    return ""
 
 
 def load_profile(path: Path) -> dict:
@@ -328,7 +354,7 @@ def auth_ok(header: str | None) -> bool:
         hmac.compare_digest(user, USERNAME)
         and hmac.compare_digest(
             hashlib.sha256(password.encode()).digest(),
-            hashlib.sha256(PASSWORD.encode()).digest(),
+            hashlib.sha256(AUTH_PASSWORD.encode()).digest(),
         )
     )
 
@@ -669,8 +695,14 @@ def check() -> int:
         problems.append(f"missing profiles directory: {PROFILES}")
     if not FTL_DB.is_file():
         problems.append(f"missing Pi-hole FTL database: {FTL_DB}")
-    if not PASSWORD:
-        problems.append("PIHM_WEB_PASSWORD is not set")
+    password = effective_password()
+    if AUTH_SOURCE not in {"pihole", "custom"}:
+        problems.append("PIHM_WEB_AUTH_SOURCE must be pihole or custom")
+    elif not password:
+        if AUTH_SOURCE == "pihole":
+            problems.append(f"Pi-hole web password was not found in container {PIHOLE_CONTAINER}")
+        else:
+            problems.append("PIHM_WEB_PASSWORD is not set for custom auth")
     if not bind_is_loopback() and not ALLOW_REMOTE_BIND:
         problems.append("non-loopback bind requires PIHM_WEB_ALLOW_REMOTE_BIND=1")
 
@@ -684,6 +716,7 @@ def check() -> int:
     print(f"Profiles: {PROFILES}")
     print(f"FTL DB:   {FTL_DB}")
     print(f"Bind:     {BIND}:{PORT}")
+    print(f"Auth:     {AUTH_SOURCE}")
     return 0
 
 
@@ -695,8 +728,15 @@ def main() -> int:
     if args.check:
         return check()
 
-    if not PASSWORD:
-        print("ERROR: PIHM_WEB_PASSWORD must be set", file=sys.stderr)
+    global AUTH_PASSWORD
+    AUTH_PASSWORD = effective_password()
+    if not AUTH_PASSWORD:
+        if AUTH_SOURCE == "pihole":
+            print(f"ERROR: Pi-hole web password was not found in container {PIHOLE_CONTAINER}", file=sys.stderr)
+        elif AUTH_SOURCE == "custom":
+            print("ERROR: PIHM_WEB_PASSWORD must be set for custom auth", file=sys.stderr)
+        else:
+            print("ERROR: PIHM_WEB_AUTH_SOURCE must be pihole or custom", file=sys.stderr)
         return 2
 
     if not MANAGER.is_file():
