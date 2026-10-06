@@ -39,6 +39,7 @@ PIHOLE_CONTAINER = os.environ.get("PIHOLE_CONTAINER", "pihole")
 PIHOLE_API_URL = os.environ.get("PIHM_WEB_PIHOLE_API_URL", "").strip()
 TAILNETS_FILE = Path(os.environ.get("PIHM_WEB_TAILNETS_FILE", "/var/lib/pihm-web/tailnets.json"))
 ACTIVE_CLIENT_WINDOW = max(300, int(os.environ.get("PIHM_WEB_ACTIVE_CLIENT_WINDOW", "86400")))
+ACTIVE_NOW_WINDOW = max(60, int(os.environ.get("PIHM_WEB_ACTIVE_NOW_WINDOW", "3600")))
 ALLOW_REMOTE_BIND = os.environ.get("PIHM_WEB_ALLOW_REMOTE_BIND", "").strip().lower() in {"1", "true", "yes"}
 CSRF = secrets.token_urlsafe(32)
 MAX_BODY = 256 * 1024
@@ -1369,8 +1370,8 @@ def devices_modal_id(name: str) -> str:
     return f"devices-{modal_key(name)}"
 
 
-def recent_modal_id(name: str) -> str:
-    return f"recent-{modal_key(name)}"
+def activity_modal_id(name: str) -> str:
+    return f"activity-{modal_key(name)}"
 
 
 def profile_return(name: str) -> str:
@@ -1761,8 +1762,10 @@ def profile_devices_modal(profile: dict, activity: list[dict]) -> str:
     return modal_shell(devices_modal_id(profile["name"]), f"Devices: {profile['name']}", body)
 
 
-def profile_recent_modal(profile: dict, activity: list[dict], names: dict[str, str]) -> str:
+def profile_activity_modal(profile: dict, activity: list[dict], names: dict[str, str]) -> str:
     recent = [item for item in activity if profile["name"] in item.get("profiles", [])]
+    active_cutoff = int(time.time()) - ACTIVE_NOW_WINDOW
+    active = [item for item in recent if item["last_seen"] >= active_cutoff]
     rows = []
     for item in recent:
         rows.append(
@@ -1774,18 +1777,30 @@ def profile_recent_modal(profile: dict, activity: list[dict], names: dict[str, s
             </tr>"""
         )
     body = f"""
-      <div class="hint">This is recent DNS activity, not a count of devices currently online. One device can appear under more than one source address.</div>
+      <div class="compact-list">
+        <div class="compact-row"><strong>Active</strong><span>{len(active)} DNS sources</span><span>queried within the last hour</span></div>
+        <div class="compact-row"><strong>Recent</strong><span>{len(recent)} DNS sources</span><span>queried within the last 24 hours</span></div>
+      </div>
+      <div class="hint" style="margin-top:8px">DNS has no persistent connected-client session. “Active” is a practical approximation based on recent query traffic. One physical device can appear under more than one source address.</div>
       <div data-filter-zone style="margin-top:8px">
-        <input class="filter" type="search" placeholder="Filter recent sources" data-filter-input>
+        <input class="filter" type="search" placeholder="Filter activity" data-filter-input>
         {('<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Name</th><th>Source address</th><th>Last query</th><th>Queries</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>') if rows else '<div class="empty" style="margin-top:8px">No DNS source addresses were seen using this policy during the last 24 hours.</div>'}
       </div>
     """
-    return modal_shell(recent_modal_id(profile["name"]), f"Recent activity: {profile['name']}", body)
+    return modal_shell(activity_modal_id(profile["name"]), f"DNS activity: {profile['name']}", body)
 
 
 def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, open_modal: str = "") -> str:
     ps = profiles()
-    activity_counts, dns_activity = profile_activity(ps)
+    recent_counts, dns_activity = profile_activity(ps)
+    active_cutoff = int(time.time()) - ACTIVE_NOW_WINDOW
+    active_counts = {p["name"]: 0 for p in ps}
+    for item in dns_activity:
+        if item["last_seen"] < active_cutoff:
+            continue
+        for name in item.get("profiles", []):
+            if name in active_counts:
+                active_counts[name] += 1
     lan_clients = recent_lan_clients()
     macs = neighbor_map()
     tail_devices, tailnet_states = all_tailscale_devices()
@@ -1816,7 +1831,7 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, o
         card_actions = [
             f'<button type="button" data-open-modal="{h(profile_modal_id(p["name"]))}">Edit</button>',
             f'<button type="button" data-open-modal="{h(devices_modal_id(p["name"]))}">Devices {len(groups)}</button>',
-            f'<button type="button" data-open-modal="{h(recent_modal_id(p["name"]))}">Recent {activity_counts.get(p["name"], 0)}</button>',
+            f'<button type="button" title="DNS source addresses that queried Pi-hole within the last hour" data-open-modal="{h(activity_modal_id(p["name"]))}">Active {active_counts.get(p["name"], 0)}</button>',
             action_form("/sync", {"profile": p["name"]}, "Sync"),
         ]
         if not p["default"]:
@@ -1832,7 +1847,7 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, o
 
         modals.append(profile_settings_modal(p))
         modals.append(profile_devices_modal(p, dns_activity))
-        modals.append(profile_recent_modal(p, dns_activity, name_by_ip))
+        modals.append(profile_activity_modal(p, dns_activity, name_by_ip))
 
     assigned_rows = []
     for p in ps:
@@ -2061,11 +2076,12 @@ def render(message: str = "", error: bool = False, theme: str = DEFAULT_THEME, o
         </ol>
       </div>
       <div class="walkthrough">
-        <strong>Understand Devices vs Recent</strong>
+        <strong>Understand Devices vs Active</strong>
         <ol>
           <li><strong>Devices N</strong> counts saved devices, grouping LAN and Tailscale identities with the same device label.</li>
-          <li><strong>Recent N</strong> counts source IP addresses that actually queried Pi-hole using that live policy during the rolling last 24 hours.</li>
-          <li>The Default profile can show <strong>Devices 0</strong> but a large <strong>Recent</strong> count because unassigned clients inherit it automatically.</li>
+          <li><strong>Active N</strong> counts source IP addresses that actually queried Pi-hole using that live policy within the last hour.</li>
+          <li>Open <strong>Active</strong> to also see the rolling 24-hour history.</li>
+          <li>The Default profile can show <strong>Devices 0</strong> but a large <strong>Active</strong> count because unassigned clients inherit it automatically.</li>
         </ol>
       </div>
       <div class="walkthrough">
