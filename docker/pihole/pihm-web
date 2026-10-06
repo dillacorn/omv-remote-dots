@@ -1695,6 +1695,42 @@ def render_profile_editor(name: str, message: str = "", error: bool = False, the
             </tr>"""
         )
 
+    current_addresses = {address for address, _ in p["clients"]}
+    link_rows = []
+    lan_macs = neighbor_map()
+    lan_candidates = recent_lan_clients()
+    for device in tailscale_devices():
+        lan_ip, reason = auto_lan_for_tail_device(device, lan_candidates)
+        already_linked = device["ip"] in current_addresses and (
+            not lan_ip or lan_ip in current_addresses
+        )
+        if already_linked:
+            action = '<span class="muted">Already linked</span>'
+        else:
+            action = action_form(
+                "/profile/link-local-device",
+                {"profile": p["name"], "device": device["ip"]},
+                "Link + sync",
+            )
+        lan_text = "Not confidently detected"
+        if lan_ip:
+            mac = lan_macs.get(lan_ip, "")
+            reserve = (
+                f" · reserve {lan_ip} for {mac}"
+                if mac
+                else ""
+            )
+            lan_text = f"{lan_ip} ({reason}){reserve}"
+        link_rows.append(
+            f"""<tr>
+              <td>{h(device["name"])}</td>
+              <td><code>{h(device["ip"])}</code></td>
+              <td>{h(lan_text)}</td>
+              <td>{h("Online" if device["online"] else "Offline")}</td>
+              <td>{action}</td>
+            </tr>"""
+        )
+
     default_action = (
         '<span class="tag">DEFAULT</span>'
         if p["default"]
@@ -1820,6 +1856,18 @@ pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
     <button type="submit">Restore description from Pi-hole</button>
   </form>
 
+
+  <h2>Link a device</h2>
+  <div class="hint">This matches the TUI workflow: the Tailscale address is linked and a LAN IPv4 is added automatically only when pihm can identify it confidently.</div>
+  {('<div class="table-wrap"><table><thead><tr><th>Device</th><th>Tailscale IPv4</th><th>LAN match</th><th>Status</th><th></th></tr></thead><tbody>' + ''.join(link_rows) + '</tbody></table></div>') if link_rows else '<div class="card muted">No local-tailnet devices discovered.</div>'}
+  <form method="post" action="/profile/link-local-device-name" class="card">
+    <input type="hidden" name="csrf" value="{h(CSRF)}">
+    <input type="hidden" name="profile" value="{h(p["name"])}">
+    <div class="actions">
+      <input name="device" placeholder="Tailscale or MagicDNS name" required>
+      <button type="submit">Find, link + sync</button>
+    </div>
+  </form>
 
   <h2>Clients</h2>
   <div class="hint">Editing or deleting a row changes the saved profile. Sync when ready. Add + sync applies immediately.</div>
@@ -2088,6 +2136,30 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.redirect(
                     f"{profile_name} description restored from Pi-hole",
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
+            if path == "/profile/link-local-device":
+                profile_name = form_one(data, "profile").strip()
+                if not valid_profile(profile_name):
+                    fail("profile not found")
+                device = find_local_tail_device(form_one(data, "device"))
+                linked = link_local_tail_device(profile_name, device)
+                self.redirect(
+                    f"Linked {device['name']}: " + ", ".join(linked),
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
+            if path == "/profile/link-local-device-name":
+                profile_name = form_one(data, "profile").strip()
+                if not valid_profile(profile_name):
+                    fail("profile not found")
+                device = find_local_tail_device(form_one(data, "device"))
+                linked = link_local_tail_device(profile_name, device)
+                self.redirect(
+                    f"Linked {device['name']}: " + ", ".join(linked),
                     target=f"/profile?name={quote(profile_name)}",
                 )
                 return
