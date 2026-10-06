@@ -159,6 +159,21 @@ Tailscale 100.x IPv4
 
 `pihm` should discover/link these where possible.
 
+### Secondary tailnets
+
+Keep the OMV host joined to its normal tailnet.
+
+pihm-web can optionally discover devices from additional tailnets through read-only Tailscale OAuth credentials. This does not join OMV to those tailnets and does not require another `tailscaled` instance.
+
+Discovery and reachability are separate:
+
+- the secondary-tailnet API can provide device names and candidate Tailscale IPv4 addresses;
+- the remote device still needs a supported path to reach OMV/Pi-hole;
+- Tailscale machine sharing can provide that path for a user who stays in another tailnet;
+- Pi-hole must observe the actual DNS source address before pihm-web enables assignment for a secondary-tailnet device.
+
+Do not assume an API-reported 100.x address from another tailnet is automatically the Pi-hole identity. Tailscale IPv4 addresses can be tailnet-local and sharing can remap addresses.
+
 ## Upstream DNS
 
 Default and recommended:
