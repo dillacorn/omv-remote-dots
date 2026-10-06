@@ -1588,12 +1588,23 @@ def render_profile_editor(name: str, message: str = "", error: bool = False, the
 
     clients = []
     for address, label in p["clients"]:
-        remove = action_form("/unassign", {"address": address}, "Remove")
+        save = f"""<form method="post" action="/profile/client-save" class="inline">
+          <input type="hidden" name="csrf" value="{h(CSRF)}">
+          <input type="hidden" name="profile" value="{h(p["name"])}">
+          <input type="hidden" name="old_address" value="{h(address)}">
+          <input name="address" value="{h(address)}" required>
+          <input name="label" value="{h(label)}" placeholder="Optional label">
+          <button type="submit">Save</button>
+        </form>"""
+        delete = action_form(
+            "/profile/client-delete",
+            {"profile": p["name"], "address": address},
+            "Delete",
+        )
         clients.append(
             f"""<tr>
-              <td>{h(label or "—")}</td>
-              <td><code>{h(address)}</code></td>
-              <td>{remove}</td>
+              <td>{save}</td>
+              <td>{delete}</td>
             </tr>"""
         )
 
@@ -1613,6 +1624,17 @@ def render_profile_editor(name: str, message: str = "", error: bool = False, the
     live_description = live_group_description(p["name"])
     suggested_port, suggested_ip = next_proxy_slot(p["name"])
     theme_picker = theme_form(theme, f"/profile?name={quote(p['name'])}")
+    proxy_info = ""
+    if p["proxy_enabled"]:
+        info = proxy_runtime_info(p)
+        proxy_info = f"""<details class="card">
+          <summary>Endpoint / runtime info</summary>
+          <p><strong>Container:</strong> <code>{h(info["label"])}</code> ({h(info["state"])})</p>
+          <p><strong>Preferred host:</strong> <code>{h(info["hostname"])}:{h(p["proxy_port"])}</code></p>
+          <p><strong>LAN:</strong> <code>{h(info["lan_ip"])}:{h(p["proxy_port"])}</code><br>
+          <strong>Tailscale:</strong> <code>{h(info["tail_ip"])}:{h(p["proxy_port"])}</code></p>
+          <div class="hint">The reservation does not start Arachnidium or force clients through it.</div>
+        </details>"""
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1648,6 +1670,7 @@ th,td {{ text-align:left; padding:9px 11px; border-bottom:1px solid var(--line);
 tr:last-child td {{ border-bottom:0; }}
 form.inline {{ display:inline-flex; gap:6px; align-items:center; margin:0; }}
 code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
+pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 </style>
 </head>
 <body>
@@ -1659,6 +1682,16 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
   <h1>{h(p["name"])}</h1>
   <div class="muted">Edit saved profile settings, then sync when ready.</div>
   {notice}
+
+  <form method="post" action="/profile/rename" class="card">
+    <input type="hidden" name="csrf" value="{h(CSRF)}">
+    <input type="hidden" name="profile" value="{h(p["name"])}">
+    <div class="actions">
+      <input name="name" value="{h(p["name"])}" required>
+      <button type="submit">Rename profile</button>
+    </div>
+    <div class="hint">Renaming also renames the live Pi-hole group when it exists and creates backups first.</div>
+  </form>
 
   <div class="actions">{default_action}{sync}{gravity}</div>
 
@@ -1702,7 +1735,8 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
 
 
   <h2>Clients</h2>
-  {('<div class="table-wrap"><table><thead><tr><th>Label</th><th>Address</th><th></th></tr></thead><tbody>' + ''.join(clients) + '</tbody></table></div>') if clients else '<div class="card muted">No explicit client addresses.</div>'}
+  <div class="hint">Editing or deleting a row changes the saved profile. Sync when ready. Add + sync applies immediately.</div>
+  {('<div class="table-wrap"><table><thead><tr><th>Address / label</th><th></th></tr></thead><tbody>' + ''.join(clients) + '</tbody></table></div>') if clients else '<div class="card muted">No explicit client addresses.</div>'}
   <div class="card">
     <form method="post" action="/assign">
       <input type="hidden" name="csrf" value="{h(CSRF)}">
@@ -1728,6 +1762,7 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
     </div>
     <div class="hint">This only reserves profile metadata. It does not deploy or force Arachnidium.</div>
   </form>
+  {proxy_info}
 
   <h2>Raw profile</h2>
   <details class="card">
@@ -1884,6 +1919,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.redirect("No new Pi-hole groups to import")
                 return
 
+            if path == "/maintenance/update-pihm":
+                installer = pihm_installer_path()
+                if installer is None:
+                    fail("pihm-installer not found")
+                run_checked([str(installer), "update"], timeout=180)
+                self.redirect("pihm updated")
+                return
+
             if path == "/profile/create":
                 name = form_one(data, "name").strip()[:120]
                 preset = form_one(data, "preset").strip()
@@ -1896,6 +1939,20 @@ class Handler(BaseHTTPRequestHandler):
                     args += ["--preset", preset]
                 manager(*args)
                 self.redirect(f"Profile {name} created", target=f"/profile?name={quote(name)}")
+                return
+
+            if path == "/profile/rename":
+                old_name = form_one(data, "profile").strip()
+                new_name = form_one(data, "name").strip()[:120]
+                if not valid_profile(old_name):
+                    fail("profile not found")
+                if not new_name:
+                    fail("new profile name is required")
+                manager("rename", old_name, new_name)
+                self.redirect(
+                    f"Profile renamed to {new_name}",
+                    target=f"/profile?name={quote(new_name)}",
+                )
                 return
 
             if path == "/profile/clone":
@@ -1944,6 +2001,28 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.redirect(
                     f"{profile_name} description restored from Pi-hole",
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
+            if path == "/profile/client-save":
+                profile_name = form_one(data, "profile").strip()
+                old_address = form_one(data, "old_address").strip()
+                new_address = form_one(data, "address").strip()
+                label = form_one(data, "label").strip()[:120]
+                edit_saved_client(profile_name, old_address, new_address, label)
+                self.redirect(
+                    f"{profile_name} client saved; sync when ready",
+                    target=f"/profile?name={quote(profile_name)}",
+                )
+                return
+
+            if path == "/profile/client-delete":
+                profile_name = form_one(data, "profile").strip()
+                address = form_one(data, "address").strip()
+                delete_saved_client(profile_name, address)
+                self.redirect(
+                    f"{address} removed from saved {profile_name}; sync when ready",
                     target=f"/profile?name={quote(profile_name)}",
                 )
                 return
