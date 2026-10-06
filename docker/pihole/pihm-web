@@ -751,6 +751,36 @@ def import_current_groups() -> list[str]:
     return imported
 
 
+def group_status() -> list[dict]:
+    if not GRAVITY_DB.is_file():
+        return []
+    try:
+        db = sqlite3.connect(f"file:{GRAVITY_DB}?mode=ro", uri=True)
+        db.row_factory = sqlite3.Row
+        rows = db.execute(
+            'SELECT g.id,g.name,COUNT(DISTINCT cg.client_id) clients,'
+            'COUNT(DISTINCT ag.adlist_id) lists,COUNT(DISTINCT dg.domainlist_id) rules '
+            'FROM "group" g '
+            'LEFT JOIN client_by_group cg ON cg.group_id=g.id '
+            'LEFT JOIN adlist_by_group ag ON ag.group_id=g.id '
+            'LEFT JOIN domainlist_by_group dg ON dg.group_id=g.id '
+            'GROUP BY g.id ORDER BY g.id'
+        ).fetchall()
+        db.close()
+    except Exception:
+        return []
+    return [
+        {
+            "id": int(row["id"]),
+            "name": str(row["name"]),
+            "clients": int(row["clients"]),
+            "lists": int(row["lists"]),
+            "rules": int(row["rules"]),
+        }
+        for row in rows
+    ]
+
+
 def timer_state() -> str:
     enabled = run(["systemctl", "is-enabled", "pihole-gravity-daily.timer"])
     active = run(["systemctl", "is-active", "pihole-gravity-daily.timer"])
@@ -980,6 +1010,16 @@ def render(message: str = "", error: bool = False) -> str:
             </tr>"""
         )
 
+    group_rows = [
+        f"""<tr>
+          <td>{row["id"]}</td>
+          <td>{h(row["name"])}</td>
+          <td>{row["clients"]}</td>
+          <td>{row["lists"]}</td>
+          <td>{row["rules"]}</td>
+        </tr>"""
+        for row in group_status()
+    ]
     default_name = next((p["name"] for p in ps if p["default"]), "Not configured")
     gravity_timer = timer_state()
     notice = ""
@@ -1088,6 +1128,7 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
       {action_form("/maintenance/import-groups", {}, "Import current Pi-hole groups")}
     </div>
   </div>
+  {('<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>ID</th><th>Pi-hole group</th><th>Clients</th><th>Lists</th><th>Rules</th></tr></thead><tbody>' + ''.join(group_rows) + '</tbody></table></div>') if group_rows else ''}
 
   <h2>Secondary tailnets</h2>
   <div class="status">Optional read-only device discovery for other tailnets. Use a Tailscale OAuth client with Devices/Core Read permission.</div>
@@ -1256,6 +1297,12 @@ code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }}
     </div>
     <div class="hint">This only reserves profile metadata. It does not deploy or force Arachnidium.</div>
   </form>
+
+  <h2>Raw profile</h2>
+  <details class="card">
+    <summary>View INI</summary>
+    <pre><code>{h(p["path"].read_text(encoding="utf-8"))}</code></pre>
+  </details>
 
   <h2>Clone profile</h2>
   <form method="post" action="/profile/clone" class="card">
