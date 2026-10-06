@@ -30,11 +30,15 @@ curl -fsSL \
 PIHM_WEB_REF=feat/pihm-web bash /tmp/pihm-web-installer
 ```
 
-The installer creates a random password and stores it in:
+By default, pihm-web reuses the existing Pi-hole web password. It reads the configured Pi-hole password from the running Pi-hole container at startup, so no second password is generated or stored.
+
+The pihm-web settings file is:
 
 ```text
 /etc/pihm-web.env
 ```
+
+It stores bind/port/username/auth-source settings, not a duplicate Pi-hole password.
 
 The backend listens only on:
 
@@ -58,7 +62,7 @@ Then open:
 http://127.0.0.1:8091
 ```
 
-Use the username/password from `/etc/pihm-web.env`.
+Use username `admin` and the same password you already use for the Pi-hole web interface.
 
 ## Optional Tailscale Serve
 
