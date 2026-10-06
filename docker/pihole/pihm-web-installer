@@ -122,11 +122,14 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now pihm-web.service
 
-PIHM_WEB_PASSWORD="$(
-    sed -n 's/^PIHM_WEB_PASSWORD=//p' "$ENV_FILE" | head -n1
-)" "$HOME/pihm-web" --check
+set -a
+. "$ENV_FILE"
+set +a
+"$HOME/pihm-web" --check
+
+systemctl enable pihm-web.service >/dev/null
+systemctl restart pihm-web.service
 
 printf '\npihm-web installed.\n'
 printf 'Local backend: http://127.0.0.1:8091\n'
