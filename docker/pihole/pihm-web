@@ -931,24 +931,34 @@ def render(message: str = "", error: bool = False) -> str:
         )
 
     tail_rows = []
+    recent_dns_addresses = {item["ip"] for item in dns_activity}
     for item in tail_devices:
         if item["ip"] in assigned_addresses:
             continue
-        assign = action_form(
-            "/assign",
-            {
-                "address": item["ip"],
-                "label": f"{item['name']} - Tailscale",
-            },
-            "Assign",
-            select_profile=True,
+        verified = item.get("source") == "local" or item["ip"] in recent_dns_addresses
+        assign = (
+            action_form(
+                "/assign",
+                {
+                    "address": item["ip"],
+                    "label": f"{item['name']} - Tailscale",
+                },
+                "Assign",
+                select_profile=True,
+            )
+            if verified
+            else '<span class="muted">Not seen by Pi-hole yet</span>'
         )
+        if item.get("source") == "local":
+            state = "Online" if item.get("online") else "Offline"
+        else:
+            state = "Verified DNS source" if verified else (item.get("last_seen") or "Discovered by API")
         tail_rows.append(
             f"""<tr>
               <td>{h(item["name"])}</td>
               <td>{h(item.get("tailnet") or "Local tailnet")}</td>
               <td><code>{h(item["ip"])}</code></td>
-              <td>{h("Online" if item.get("source") == "local" and item.get("online") else (item.get("last_seen") or "API"))}</td>
+              <td>{h(state)}</td>
               <td>{assign}</td>
             </tr>"""
         )
@@ -1065,6 +1075,7 @@ footer {{ margin-top:32px; color:var(--muted); font-size:13px; }}
   {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>LAN IPv4</th><th>MAC</th><th>Seen</th><th>Profile</th></tr></thead><tbody>' + ''.join(lan_rows) + '</tbody></table></div>') if lan_rows else '<div class="empty">No unassigned LAN clients currently discovered.</div>'}
 
   <h2>Tailscale clients</h2>
+  <div class="status">Secondary-tailnet addresses must be seen by Pi-hole before pihm-web enables assignment.</div>
   {('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Tailnet</th><th>Tailscale IPv4</th><th>Status</th><th>Profile</th></tr></thead><tbody>' + ''.join(tail_rows) + '</tbody></table></div>') if tail_rows else '<div class="empty">No unassigned Tailscale clients currently discovered.</div>'}
 
   <h2>Maintenance</h2>
