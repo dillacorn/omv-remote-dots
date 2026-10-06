@@ -559,6 +559,24 @@ def recent_lan_clients() -> list[dict]:
     return sorted(found.values(), key=sort_key)
 
 
+def normalize_device_name(value: str) -> str:
+    value = (value or "").strip().rstrip(".").split(".", 1)[0].casefold()
+    import re
+    value = re.sub(r"[-_.]\d+$", "", value)
+    return re.sub(r"[^a-z0-9]+", "", value)
+
+
+def private_ip_from_endpoint(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if value.startswith("["):
+        host = value[1:].split("]", 1)[0]
+    else:
+        host = value.rsplit(":", 1)[0] if ":" in value else value
+    return host if rfc1918_ipv4(host) else ""
+
+
 def tailscale_devices() -> list[dict]:
     raw = run(["tailscale", "status", "--json"])
     if not raw:
@@ -588,11 +606,20 @@ def tailscale_devices() -> list[dict]:
         dns = str(node.get("DNSName") or "").rstrip(".")
         host = str(node.get("HostName") or "").strip()
         name = host or (dns.split(".", 1)[0] if dns else ipv4)
+        lan_candidates = []
+        direct = private_ip_from_endpoint(str(node.get("CurAddr") or ""))
+        if direct and is_direct_lan_ip(direct):
+            lan_candidates.append(direct)
+        for endpoint in node.get("Addrs") or []:
+            candidate = private_ip_from_endpoint(str(endpoint))
+            if candidate and is_direct_lan_ip(candidate) and candidate not in lan_candidates:
+                lan_candidates.append(candidate)
 
         out.append({
             "name": name,
             "dns": dns,
             "ip": ipv4,
+            "lan_candidates": lan_candidates,
             "online": bool(node.get("Online", False)),
         })
 
@@ -1019,6 +1046,66 @@ def next_proxy_slot(profile_name: str) -> tuple[int, str]:
     if octet > 254:
         fail("no free proxy Docker IP remains in 172.30.53.0/24")
     return port, f"172.30.53.{octet}"
+
+
+def auto_lan_for_tail_device(device: dict, candidates: list[dict]) -> tuple[str, str]:
+    direct = [
+        value
+        for value in device.get("lan_candidates", [])
+        if rfc1918_ipv4(value)
+    ]
+    if direct:
+        return direct[0], "Tailscale direct connection"
+
+    names = {
+        normalize_device_name(device.get("name", "")),
+        normalize_device_name(device.get("dns", "")),
+    }
+    names.discard("")
+    matches = []
+    for item in candidates:
+        name = normalize_device_name(item.get("name", ""))
+        if name and name in names:
+            matches.append(item["ip"])
+    if len(matches) == 1:
+        return matches[0], "matching LAN hostname"
+    return "", ""
+
+
+def find_local_tail_device(value: str) -> dict:
+    needle = value.strip().rstrip(".").casefold()
+    short = needle.split(".", 1)[0]
+    matches = []
+    for device in tailscale_devices():
+        values = {
+            str(device.get("name") or "").casefold(),
+            str(device.get("dns") or "").casefold(),
+            str(device.get("dns") or "").split(".", 1)[0].casefold(),
+            str(device.get("ip") or "").casefold(),
+        }
+        if needle in values or short in values:
+            matches.append(device)
+    if len(matches) != 1:
+        fail("Tailscale device not found or ambiguous")
+    return matches[0]
+
+
+def link_local_tail_device(profile_name: str, device: dict) -> list[str]:
+    p = profile_by_name(profile_name)
+    candidates = recent_lan_clients()
+    lan_ip, _ = auto_lan_for_tail_device(device, candidates)
+    entries = [(device["ip"], f"{device['name']} - Tailscale")]
+    if lan_ip:
+        entries.append((lan_ip, f"{device['name']} - LAN"))
+
+    current = list(p["clients"])
+    for address, label in entries:
+        remove_address_from_other_profiles(address, profile_name)
+        current = [(a, old_label) for a, old_label in current if a != address]
+        current.append((address, label))
+    write_profile_clients(p, current)
+    manager("apply", profile_name)
+    return [address for address, _ in entries]
 
 
 def write_profile_clients(profile: dict, entries: list[tuple[str, str]]) -> None:
