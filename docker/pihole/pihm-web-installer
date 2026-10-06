@@ -116,6 +116,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
+StateDirectory=pihm-web
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
