@@ -155,7 +155,16 @@ with mode `0600`. Client secrets are never displayed again by the web interface.
 
 Adding a secondary tailnet provides **discovery only**. It does not automatically give those devices network access to Pi-hole.
 
-For a user who remains in another tailnet, share the OMV/Pi-hole Tailscale machine to that user, then verify the remote device can reach Pi-hole and that Pi-hole logs the device's real `100.x` source address before relying on per-device profiles.
+Tailscale IPv4 addresses are only guaranteed unique inside a tailnet, and machine sharing can remap addresses. For that reason, pihm-web does not enable one-click assignment for a secondary-tailnet device until that exact source address has actually appeared in Pi-hole's recent query history.
+
+For a user who remains in another tailnet:
+
+1. share the OMV/Pi-hole Tailscale machine to that user;
+2. have the remote device send DNS traffic to Pi-hole;
+3. confirm the secondary device row changes to `Verified DNS source`;
+4. assign the verified address to the desired profile.
+
+If the API-reported address does not become the Pi-hole source address, use the Recent DNS clients table to identify the source Pi-hole actually receives instead of guessing.
 
 An alternative is to invite that user into the same tailnet instead of using machine sharing.
 
