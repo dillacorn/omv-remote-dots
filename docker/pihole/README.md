@@ -249,11 +249,20 @@ Both addresses select the same Pi-hole policy. The LAN address is used when the 
 
 ## Optional web interface
 
-`pihm-web` is an optional browser interface for the same profile/client data managed by `pihm`.
+`pihm-web` is an optional browser interface for the same profile data managed by `pihm`.
 
-The TUI remains supported and independent. The web interface is intended for frequent client assignment from a phone or desktop browser.
+It supports normal profile creation/editing, client assignment, recent DNS-client activity, sync/refresh operations, maintenance controls, and optional read-only discovery from additional Tailscale tailnets.
 
-See [PIHM-WEB.md](PIHM-WEB.md) for the testing-branch install and access instructions.
+The TUI remains supported and independent.
+
+After installing pihm, manage the browser UI from:
+
+```text
+pihm
+-> Web interface
+```
+
+See [PIHM-WEB.md](PIHM-WEB.md) for access, authentication, multi-tailnet setup, and security details.
 
 ## Daily blocklist updates
 
