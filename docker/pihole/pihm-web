@@ -1642,7 +1642,7 @@ def profile_settings_modal(profile: dict) -> str:
       </form>
       <div class="hint">The live Pi-hole group is renamed too when it exists. Backups are created first.</div>
 
-      <form method="post" action="/profile/save" data-filter-zone>
+      <form method="post" action="/profile/save">
         <input type="hidden" name="csrf" value="{h(CSRF)}">
         <input type="hidden" name="profile" value="{h(p["name"])}">
 
@@ -1652,16 +1652,26 @@ def profile_settings_modal(profile: dict) -> str:
           <div class="hint">Live Pi-hole description: {h(live_description or "none")}</div>
         </div>
 
-        <h3>Blocklists</h3>
-        <input class="filter" type="search" placeholder="Filter blocklists" data-filter-input>
-        <div class="check-list" style="margin-top:6px">{''.join(checks) or '<div class="empty">No catalog entries found.</div>'}</div>
+        <details>
+          <summary>Blocklists · {len(p["keys"])} selected</summary>
+          <div data-filter-zone style="margin-top:8px">
+            <input class="filter" type="search" placeholder="Filter blocklists" data-filter-input>
+            <div class="check-list" style="margin-top:6px">{''.join(checks) or '<div class="empty">No catalog entries found.</div>'}</div>
+          </div>
+          <div class="field">
+            <label>Extra blocklist URLs</label>
+            <textarea name="extra_urls">{h(chr(10).join(p["extra_urls"]))}</textarea>
+          </div>
+        </details>
 
-        <div class="split">
-          <div class="field"><label>Extra blocklist URLs</label><textarea name="extra_urls">{h(chr(10).join(p["extra_urls"]))}</textarea></div>
-          <div class="field"><label>Allowed domains</label><textarea name="allow">{h(chr(10).join(p["allow"]))}</textarea></div>
-          <div class="field"><label>Denied domains</label><textarea name="deny">{h(chr(10).join(p["deny"]))}</textarea></div>
-          <div class="field"><label>Blocked TLDs</label><textarea name="tlds">{h(chr(10).join(p["tlds"]))}</textarea></div>
-        </div>
+        <details>
+          <summary>Domain and TLD rules · {len(p["allow"])} allow / {len(p["deny"])} deny / {len(p["tlds"])} TLD</summary>
+          <div class="split">
+            <div class="field"><label>Allowed domains</label><textarea name="allow">{h(chr(10).join(p["allow"]))}</textarea></div>
+            <div class="field"><label>Denied domains</label><textarea name="deny">{h(chr(10).join(p["deny"]))}</textarea></div>
+            <div class="field"><label>Blocked TLDs</label><textarea name="tlds">{h(chr(10).join(p["tlds"]))}</textarea></div>
+          </div>
+        </details>
 
         <div class="modal-actions"><button type="submit">Save profile</button></div>
       </form>
@@ -2554,9 +2564,17 @@ def check() -> int:
     print(f"Profiles: {PROFILES}")
     print(f"FTL DB:   {FTL_DB}")
     print(f"Gravity:  {GRAVITY_DB}")
+    recent = recent_dns_clients()
+    current_profiles = profiles()
+    counts, _ = profile_activity(current_profiles)
+    default_profile = next((p["name"] for p in current_profiles if p["default"]), "")
+
     print(f"Catalog:  {CATALOG}")
     print(f"Bind:     {BIND}:{PORT}")
     print(f"Auth:     {AUTH_SOURCE}")
+    print(f"Recent DNS sources (24h): {len(recent)}")
+    if default_profile:
+        print(f"Default activity: {default_profile} = {counts.get(default_profile, 0)} recent sources")
     if AUTH_SOURCE == "pihole":
         print(f"Pi-hole API: {api_url}")
     return 0
