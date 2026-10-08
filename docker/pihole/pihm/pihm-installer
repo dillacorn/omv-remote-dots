@@ -239,10 +239,6 @@ backup_legacy_profiles
 web_installed=0
 if [[ -e /etc/systemd/system/pihm-web.service || -e "$LEGACY_HOME/pihm-web" || -e "$DEST/pihm-web" ]]; then
   web_installed=1
-  if [[ -e /etc/systemd/system/pihm-web.service ]]; then
-    need systemctl
-    systemctl stop pihm-web.service
-  fi
 fi
 
 update_backup="$DEST/backups/update-$stamp"
@@ -270,12 +266,30 @@ printf '%s\n' "$REF" >"$SOURCE_REF_FILE"
 
 archive_legacy_core
 
+legacy_compat=0
+if (( web_installed )) && [[ "$LEGACY_HOME" != "$DEST" ]]; then
+  ln -sfn "$DEST/pihole-profile-manager" "$LEGACY_HOME/pihole-profile-manager"
+  ln -sfn "$DEST/profile-catalog.ini" "$LEGACY_HOME/profile-catalog.ini"
+  ln -sfn "$DEST/profiles.d" "$LEGACY_HOME/profiles.d"
+  legacy_compat=1
+fi
+
 if (( web_installed )); then
   printf '\nMigrating/updating installed pihm-web into %s ...\n' "$DEST"
   PIHOLE_HOME="$PIHOLE_HOME" \
   PIHM_HOME="$DEST" \
   PIHM_WEB_REF="$REF" \
     "$DEST/pihm-web-installer" update
+fi
+
+if (( legacy_compat )); then
+  for path in \
+    "$LEGACY_HOME/pihole-profile-manager" \
+    "$LEGACY_HOME/profile-catalog.ini" \
+    "$LEGACY_HOME/profiles.d"
+  do
+    [[ -L "$path" ]] && rm -f -- "$path"
+  done
 fi
 
 printf '\nInstalled successfully.\n'
