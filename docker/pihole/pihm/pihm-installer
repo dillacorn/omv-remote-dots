@@ -77,6 +77,16 @@ preflight_profile_migration() {
   shopt -u nullglob
 }
 
+backup_legacy_profiles() {
+  local legacy_profiles="$LEGACY_HOME/profiles.d"
+  [[ "$legacy_profiles" != "$DEST/profiles.d" && -d "$legacy_profiles" ]] || return 0
+
+  local backup_dir="$DEST/backups/pre-layout-migration-$stamp"
+  mkdir -p "$backup_dir"
+  cp -a -- "$legacy_profiles" "$backup_dir/profiles.d"
+  printf 'Profile migration backup: %s\n' "$backup_dir/profiles.d"
+}
+
 migrate_profiles() {
   local legacy_profiles="$LEGACY_HOME/profiles.d"
   local new_profiles="$DEST/profiles.d"
@@ -224,6 +234,17 @@ bash -n "$stage/pihm-installer" "$stage/pihm-web-installer"
 preflight_profile_migration
 
 stamp="$(date '+%Y%m%d-%H%M%S')"
+backup_legacy_profiles
+
+web_installed=0
+if [[ -e /etc/systemd/system/pihm-web.service || -e "$LEGACY_HOME/pihm-web" || -e "$DEST/pihm-web" ]]; then
+  web_installed=1
+  if [[ -e /etc/systemd/system/pihm-web.service ]]; then
+    need systemctl
+    systemctl stop pihm-web.service
+  fi
+fi
+
 update_backup="$DEST/backups/update-$stamp"
 for f in "${FILES[@]}"; do
   if [[ -e "$DEST/$f" ]] && ! cmp -s "$stage/$f" "$DEST/$f"; then
@@ -249,7 +270,7 @@ printf '%s\n' "$REF" >"$SOURCE_REF_FILE"
 
 archive_legacy_core
 
-if [[ -e /etc/systemd/system/pihm-web.service || -e "$LEGACY_HOME/pihm-web" || -e "$DEST/pihm-web" ]]; then
+if (( web_installed )); then
   printf '\nMigrating/updating installed pihm-web into %s ...\n' "$DEST"
   PIHOLE_HOME="$PIHOLE_HOME" \
   PIHM_HOME="$DEST" \
