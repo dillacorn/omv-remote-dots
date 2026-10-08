@@ -100,9 +100,14 @@ called `seerr`.
   hostname and certificate filenames change when the Tailscale machine
   is renamed. Never copy the generic Pi-hole example onto a live stack.
 
-Repository examples do not automatically update the host. Compare and back
-up any live maintenance scripts before installing updated ones. Do not
-restart Tailscale or Pi-hole for these maintenance adjustments.
+Repository examples do not automatically update the host. The optional
+`docker/seerr/update-migrated-maintenance.py` helper checks the actual
+migrated Seerr/Tailscale containers, previews legacy-name corrections to the
+existing renewal/restart/Watchtower files, and backs up only those files it
+changes. It preserves unrelated settings and never restarts any service.
+Run it with `--dry-run` first and `--apply` only after reviewing the result.
+Any Watchtower Compose changes need a separate, reviewed recreation to take
+effect. It does not touch Pi-hole, application data or Tailscale state.
 
 ## Recovery and limitations
 
