@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# pihm-installer - install/update the Pi-hole profile manager TUI
+#
+# Runtime layout:
+#   /docker/pihole/          Pi-hole / Compose data
+#   /docker/pihole/pihm/     pihm programs, profiles, catalog, backups
+#
+# Overrides:
+#   PIHM_REPO=dillacorn/omv-remote-dots
+#   PIHM_REF=main
+#   PIHOLE_HOME=/docker/pihole
+#   PIHM_HOME=/docker/pihole/pihm
+#   PIHM_BINDIR=/usr/local/bin
+#   PIHM_COMMAND=pihm
+
+set -euo pipefail
+
+REPO="\${PIHM_REPO:-dillacorn/omv-remote-dots}"
+PIHOLE_HOME="\${PIHOLE_HOME:-/docker/pihole}"
+DEST="\${PIHM_HOME:-\$PIHOLE_HOME/pihm}"
+LEGACY_HOME="\${PIHM_LEGACY_HOME:-\$PIHOLE_HOME}"
+BINDIR="\${PIHM_BINDIR:-/usr/local/bin}"
+COMMAND="\${PIHM_COMMAND:-pihm}"
+SOURCE_REF_FILE="\$DEST/.pihm-source-ref"
+LEGACY_SOURCE_REF_FILE="\$LEGACY_HOME/.pihm-source-ref"
+ACTION="\${1:-install}"
+
+REF="\${PIHM_REF:-}"
+if [[ -z "\$REF" && -f "\$SOURCE_REF_FILE" ]]; then
+  REF="\$(cat "\$SOURCE_REF_FILE")"
+elif [[ -z "\$REF" && -f "\$LEGACY_SOURCE_REF_FILE" ]]; then
+  REF="\$(cat "\$LEGACY_SOURCE_REF_FILE")"
+fi
+REF="\${REF:-main}"
+RAW_BASE="https://raw.githubusercontent.com/\${REPO}/\${REF}/docker/pihole/pihm"
+
+FILES=(
+  pihole-profile-manager
+  pihole-profile-tui
+  profile-catalog.ini
+  profile.example.ini
+  pihm-installer
+  pihm-web-installer
+)
+
+die() {
+  printf 'ERROR: %s\n' "\$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "\$1" >/dev/null 2>&1 || die "Required command not found: \$1"
+}
+
+archive_file() {
+  local src="\$1"
+  local archive_dir="\$2"
+  [[ -e "\$src" || -L "\$src" ]] || return 0
+  mkdir -p "\$archive_dir"
+  mv -- "\$src" "\$archive_dir/"
+}
+
+preflight_profile_migration() {
+  local legacy_profiles="\$LEGACY_HOME/profiles.d"
+  local new_profiles="\$DEST/profiles.d"
+  [[ "\$legacy_profiles" != "\$new_profiles" && -d "\$legacy_profiles" ]] || return 0
+
+  mkdir -p "\$new_profiles"
+  shopt -s nullglob
+  local src dst
+  for src in "\$legacy_profiles"/*.ini; do
+    dst="\$new_profiles/\$(basename "\$src")"
+    if [[ -e "\$dst" ]] && ! cmp -s "\$src" "\$dst"; then
+      die "Profile migration conflict: \$src differs from \$dst"
+    fi
+  done
+  shopt -u nullglob
+}
+
+migrate_profiles() {
+  local legacy_profiles="\$LEGACY_HOME/profiles.d"
+  local new_profiles="\$DEST/profiles.d"
+  [[ "\$legacy_profiles" != "\$new_profiles" && -d "\$legacy_profiles" ]] || return 0
+
+  mkdir -p "\$new_profiles"
+  shopt -s nullglob
+  local src dst
+  for src in "\$legacy_profiles"/*.ini; do
+    dst="\$new_profiles/\$(basename "\$src")"
+    if [[ -e "\$dst" ]]; then
+      rm -f -- "\$src"
+    else
+      mv -- "\$src" "\$dst"
+    fi
+  done
+  shopt -u nullglob
+  rmdir "\$legacy_profiles" 2>/dev/null || true
+}
+
+archive_legacy_core() {
+  [[ "\$LEGACY_HOME" != "\$DEST" ]] || return 0
+
+  local archive_dir="\$DEST/backups/legacy-top-level-\$stamp"
+  local name path
+  for name in \
+    pihole-profile-manager \
+    pihole-profile-tui \
+    profile-catalog.ini \
+    profile.example.ini \
+    pihm-installer \
+    pihm-web-installer \
+    .pihm-source-ref
+  do
+    archive_file "\$LEGACY_HOME/\$name" "\$archive_dir"
+  done
+
+  shopt -s nullglob
+  for path in \
+    "\$LEGACY_HOME"/pihole-profile-manager.backup-* \
+    "\$LEGACY_HOME"/pihole-profile-tui.backup-* \
+    "\$LEGACY_HOME"/profile-catalog.ini.backup-* \
+    "\$LEGACY_HOME"/profile.example.ini.backup-* \
+    "\$LEGACY_HOME"/pihm-installer.backup-* \
+    "\$LEGACY_HOME"/pihm-web-installer.backup-*
+  do
+    archive_file "\$path" "\$archive_dir"
+  done
+  shopt -u nullglob
+}
+
+[[ \${EUID:-\$(id -u)} -eq 0 ]] || die "Run this installer as root (or with sudo)."
+
+case "\$ACTION" in
+  install|update|uninstall) ;;
+  *) die "Usage: pihm-installer [install|update|uninstall]" ;;
+esac
+
+if [[ "\$ACTION" == "uninstall" ]]; then
+  if [[ -e /etc/systemd/system/pihm-web.service || -e "\$DEST/pihm-web" || -e "\$LEGACY_HOME/pihm-web" ]]; then
+    die "pihm-web is installed. Remove it first with: pihm-web-installer uninstall"
+  fi
+
+  rm -f "\$BINDIR/\$COMMAND" "\$BINDIR/pihm-installer" "\$BINDIR/pihm-web-installer"
+  rm -f \
+    "\$DEST/pihole-profile-manager" \
+    "\$DEST/pihole-profile-tui" \
+    "\$DEST/profile-catalog.ini" \
+    "\$DEST/profile.example.ini" \
+    "\$DEST/pihm-installer" \
+    "\$DEST/pihm-web-installer" \
+    "\$SOURCE_REF_FILE"
+
+  printf 'Removed pihm program files and command links.\n'
+  printf 'Preserved Pi-hole data, %s/profiles.d, and %s/backups.\n' "\$DEST" "\$DEST"
+  exit 0
+fi
+
+need python3
+need install
+need mktemp
+need cmp
+
+SCRIPT_SOURCE="\${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [[ -n "\$SCRIPT_SOURCE" && -f "\$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="\$(
+    cd -- "\$(dirname -- "\$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd
+  )"
+fi
+
+LOCAL_SOURCE=0
+if [[ "\$ACTION" == "install" &&
+      -n "\$SCRIPT_DIR" &&
+      -f "\$SCRIPT_DIR/pihole-profile-manager" &&
+      -f "\$SCRIPT_DIR/pihole-profile-tui" &&
+      -f "\$SCRIPT_DIR/profile-catalog.ini" &&
+      -f "\$SCRIPT_DIR/profile.example.ini" &&
+      -f "\$SCRIPT_DIR/pihm-installer" &&
+      -f "\$SCRIPT_DIR/pihm-web-installer" ]]; then
+  LOCAL_SOURCE=1
+else
+  need curl
+fi
+
+mkdir -p "\$DEST" "\$DEST/profiles.d" "\$DEST/backups" "\$BINDIR"
+
+stage="\$(mktemp -d)"
+cleanup() {
+  rm -rf -- "\$stage"
+}
+trap cleanup EXIT
+
+printf 'pihm installer\n'
+printf '  source: %s@%s\n' "\$REPO" "\$REF"
+printf '  Pi-hole: %s\n' "\$PIHOLE_HOME"
+printf '  pihm:    %s\n' "\$DEST"
+printf '  command: %s/%s\n\n' "\$BINDIR" "\$COMMAND"
+
+for f in "\${FILES[@]}"; do
+  if (( LOCAL_SOURCE )); then
+    cp -- "\$SCRIPT_DIR/\$f" "\$stage/\$f"
+  else
+    curl -fsSL -H 'Cache-Control: no-cache' "\$RAW_BASE/\$f" -o "\$stage/\$f"
+  fi
+done
+
+python3 -m py_compile \
+  "\$stage/pihole-profile-manager" \
+  "\$stage/pihole-profile-tui"
+bash -n "\$stage/pihm-installer" "\$stage/pihm-web-installer"
+
+preflight_profile_migration
+
+stamp="\$(date '+%Y%m%d-%H%M%S')"
+update_backup="\$DEST/backups/update-\$stamp"
+for f in "\${FILES[@]}"; do
+  if [[ -e "\$DEST/\$f" ]] && ! cmp -s "\$stage/\$f" "\$DEST/\$f"; then
+    mkdir -p "\$update_backup"
+    cp -a -- "\$DEST/\$f" "\$update_backup/\$f"
+    printf 'Backup: %s\n' "\$update_backup/\$f"
+  fi
+done
+
+install -m 0755 "\$stage/pihole-profile-manager" "\$DEST/pihole-profile-manager"
+install -m 0755 "\$stage/pihole-profile-tui" "\$DEST/pihole-profile-tui"
+install -m 0644 "\$stage/profile-catalog.ini" "\$DEST/profile-catalog.ini"
+install -m 0644 "\$stage/profile.example.ini" "\$DEST/profile.example.ini"
+install -m 0755 "\$stage/pihm-installer" "\$DEST/pihm-installer"
+install -m 0755 "\$stage/pihm-web-installer" "\$DEST/pihm-web-installer"
+
+migrate_profiles
+
+ln -sfn "\$DEST/pihole-profile-manager" "\$BINDIR/\$COMMAND"
+ln -sfn "\$DEST/pihm-installer" "\$BINDIR/pihm-installer"
+ln -sfn "\$DEST/pihm-web-installer" "\$BINDIR/pihm-web-installer"
+printf '%s\n' "\$REF" >"\$SOURCE_REF_FILE"
+
+archive_legacy_core
+
+if [[ -e /etc/systemd/system/pihm-web.service || -e "\$LEGACY_HOME/pihm-web" || -e "\$DEST/pihm-web" ]]; then
+  printf '\nMigrating/updating installed pihm-web into %s ...\n' "\$DEST"
+  PIHOLE_HOME="\$PIHOLE_HOME" \
+  PIHM_HOME="\$DEST" \
+  PIHM_WEB_REF="\$REF" \
+    "\$DEST/pihm-web-installer" update
+fi
+
+printf '\nInstalled successfully.\n'
+printf 'Source ref: %s\n' "\$REF"
+printf 'pihm home: %s\n' "\$DEST"
+printf 'Profiles:  %s/profiles.d\n' "\$DEST"
+printf 'Run the TUI with: %s\n' "\$COMMAND"
