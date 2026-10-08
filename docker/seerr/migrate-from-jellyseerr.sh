@@ -531,6 +531,9 @@ print("Pi-hole Compose DNS host update: OK")' "$NEW_FQDN" "$OLD_FQDN"
   # Preserve all active Compose overlays. The project's dnsproxy shares the
   # Pi-hole network namespace, so recreate them together and no other service.
   "${PDC[@]}" up -d --no-deps --force-recreate pihole dnsproxy
+  # Compose recreation replaces container IDs. Resolve the newly created
+  # dnsproxy container before checking its runtime state.
+  resolve_dnsproxy_container
   docker inspect pihole | python3 -c '
 import json,sys
 x=json.load(sys.stdin)[0]["Config"]["Env"]
