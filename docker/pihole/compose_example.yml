@@ -13,7 +13,7 @@ services:
         192.168.1.10 freshrss.example-tailnet.ts.net
         192.168.1.10 jellyfin.example-tailnet.ts.net
         192.168.1.10 navidrome.example-tailnet.ts.net
-        192.168.1.10 jellyseerr.example-tailnet.ts.net
+        192.168.1.10 seerr.example-tailnet.ts.net
         192.168.1.10 karakeep.example-tailnet.ts.net
         192.168.1.10 audiobookshelf.example-tailnet.ts.net
         192.168.1.10 ntfy.example-tailnet.ts.net
@@ -65,7 +65,7 @@ services:
       - /docker/freshrss/ts/state/certs:/etc/nginx/freshrss-certs:ro
       - /docker/jellyfin/ts/state/certs:/etc/nginx/jellyfin-certs:ro
       - /docker/navidrome/ts/state/certs:/etc/nginx/navidrome-certs:ro
-      - /docker/jellyseerr/ts/state/certs:/etc/nginx/jellyseerr-certs:ro
+      - /docker/seerr/ts/state/certs:/etc/nginx/seerr-certs:ro
       - /docker/karakeep/ts/state/certs:/etc/nginx/karakeep-certs:ro
       - /docker/audiobookshelf/ts/state/certs:/etc/nginx/audiobookshelf-certs:ro
       - /docker/ntfy/ts/state/certs:/etc/nginx/ntfy-certs:ro

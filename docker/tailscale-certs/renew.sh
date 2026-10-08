@@ -41,7 +41,7 @@ RESTART_NGINX=1
 
 # Optional sidecar services to renew.
 # Add more names here as needed.
-EXTRA_SERVICES=("jellyfin" "navidrome" "flame" "jellyseerr" "audiobookshelf" "brave" "ntfy" "immich" "vaultwarden" "mullvad" "transmission" "dockge" "obico")
+EXTRA_SERVICES=("jellyfin" "navidrome" "flame" "seerr" "audiobookshelf" "brave" "ntfy" "immich" "vaultwarden" "mullvad" "transmission" "dockge" "obico")
 
 # Optional per-service container overrides.
 # Default if omitted: tailscale-<service>
@@ -49,7 +49,7 @@ declare -A SERVICE_CONTAINER=(
   [jellyfin]="tailscale-jellyfin"
   [navidrome]="tailscale-navidrome"
   [flame]="tailscale-flame"
-  [jellyseerr]="tailscale-jellyseerr"
+  [seerr]="tailscale-seerr"
   [audiobookshelf]="tailscale-audiobookshelf"
   [brave]="tailscale-brave"
   [ntfy]="tailscale-ntfy"
@@ -67,7 +67,7 @@ declare -A SERVICE_CERT_DIR=(
   [jellyfin]="/docker/jellyfin/ts/state/certs"
   [navidrome]="/docker/navidrome/ts/state/certs"
   [flame]="/docker/flame/ts/state/certs"
-  [jellyseerr]="/docker/jellyseerr/ts/state/certs"
+  [seerr]="/docker/seerr/ts/state/certs"
   [audiobookshelf]="/docker/audiobookshelf/ts/state/certs"
   [brave]="/docker/brave/ts/state/certs"
   [ntfy]="/docker/ntfy/ts/state/certs"

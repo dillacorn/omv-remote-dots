@@ -1,4 +1,4 @@
-# /docker/jellyseerr/compose.yml
+# /docker/seerr/compose.yml
 
 configs:
   ts-serve:
@@ -55,41 +55,17 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  mariadb_jellyseerr:
-    image: mariadb:latest
-    container_name: mariadb_jellyseerr
-    network_mode: "service:tailscale"
-    environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${MYSQL_DATABASE}
-      - MYSQL_USER=${MYSQL_USER}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
-    volumes:
-      - ${MARIADB_DATA_PATH}:/var/lib/mysql
-    command: --innodb-buffer-pool-size=512M --max-connections=200
-    depends_on:
-      tailscale:
-        condition: service_healthy
-    labels:
-      com.centurylinklabs.watchtower.no-pull: "true"
-    restart: unless-stopped
-
-  jellyseerr:
+  seerr:
     image: ${IMAGE_URL}
     container_name: ${SERVICE}
+    init: true
     network_mode: "service:tailscale"
     environment:
       - TZ=${TZ}
       - DB_TYPE=${DB_TYPE}
-      - DB_HOST=${DB_HOST}
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASS=${DB_PASS}
     volumes:
-      - ${JELLYSEERR_CONFIG_PATH}:/app/config
+      - ${SEERR_CONFIG_PATH}:/app/config
     depends_on:
       tailscale:
         condition: service_healthy
-      mariadb_jellyseerr:
-        condition: service_started
     restart: unless-stopped

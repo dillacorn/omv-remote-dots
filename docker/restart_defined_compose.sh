@@ -9,7 +9,7 @@ set -euo pipefail
 COMPOSE_DIRS=(
   "/docker/jellyfin"
   "/docker/immich"
-  "/docker/jellyseerr"
+  "/docker/seerr"
   "/docker/ntfy"
   "/docker/brave"
   "/docker/freshrss"
