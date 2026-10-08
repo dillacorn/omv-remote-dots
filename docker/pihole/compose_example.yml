@@ -65,6 +65,9 @@ services:
       - /docker/freshrss/ts/state/certs:/etc/nginx/freshrss-certs:ro
       - /docker/jellyfin/ts/state/certs:/etc/nginx/jellyfin-certs:ro
       - /docker/navidrome/ts/state/certs:/etc/nginx/navidrome-certs:ro
+      # Clean install. Migrated servers may retain the old volume mapping:
+      # /docker/jellyseerr/ts/state/certs:/etc/nginx/jellyseerr-certs:ro
+      # Never overwrite the live Pi-hole Compose configuration with this example.
       - /docker/seerr/ts/state/certs:/etc/nginx/seerr-certs:ro
       - /docker/karakeep/ts/state/certs:/etc/nginx/karakeep-certs:ro
       - /docker/audiobookshelf/ts/state/certs:/etc/nginx/audiobookshelf-certs:ro

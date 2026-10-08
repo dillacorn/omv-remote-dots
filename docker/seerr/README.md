@@ -74,6 +74,36 @@ seerr.<tailnet>.ts.net -> Pi-hole LAN DNS -> OMV LAN IP -> nginx-pihole:443
                     -> tailscale-jellyseerr:5055 -> Seerr
 ```
 
+## Maintenance integration after an in-place migration
+
+The upgraded server continues using the original Compose names and state
+paths. This is expected and does not prevent its MagicDNS machine from being
+called `seerr`.
+
+- The repository certificate-renewal script now falls back from
+  `tailscale-seerr` to `tailscale-jellyseerr`, but only when the legacy
+  sidecar still mounts the expected Tailscale state. Its exported certificates
+  are renewed in `/docker/jellyseerr/ts/state/certs`. Verify with
+  `/docker/tailscale-certs/renew.sh --dry-run`.
+- The repository Compose-restart script detects the active Seerr service
+  (including legacy `jellyseerr`) and uses the Compose project and overlay
+  files recorded by the running container.
+- Watchtower uses container **names**, not MagicDNS machine names. For an
+  upgraded stack, keep `jellyseerr` and `tailscale-jellyseerr` in the live
+  Watchtower target list. For a clean install, use `seerr` and
+  `tailscale-seerr`. Preserve the existing schedule and all unrelated
+  targets. Seerr itself uses SQLite; a new `mariadb_seerr` is not needed.
+- Pi-hole's clean-install example assumes `tailscale-seerr:5055` and
+  `/docker/seerr/ts/state/certs`. On the upgraded host, preserve the
+  functioning backend `tailscale-jellyseerr:5055` and the existing
+  certificate mount from `/docker/jellyseerr/ts/state/certs`; only the
+  hostname and certificate filenames change when the Tailscale machine
+  is renamed. Never copy the generic Pi-hole example onto a live stack.
+
+Repository examples do not automatically update the host. Compare and back
+up any live maintenance scripts before installing updated ones. Do not
+restart Tailscale or Pi-hole for these maintenance adjustments.
+
 ## Recovery and limitations
 
 If automatic rollback fails, stop and inspect the logged backup path, exact Compose files, image and container state before retrying. Do not run `docker compose down -v`, delete the original Jellyseerr/Seerr databases, or clean up unused MariaDB files until the new application and its integrations have been verified.

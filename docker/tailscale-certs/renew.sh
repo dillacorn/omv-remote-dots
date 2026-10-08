@@ -188,6 +188,20 @@ renew_service_cert() {
   container="${SERVICE_CONTAINER[${service}]:-tailscale-${service}}"
   cert_dir="${SERVICE_CERT_DIR[${service}]:-/docker/${service}/ts/state/certs}"
 
+  # Seerr in-place upgrades retain the old sidecar name and state path.
+  # The Tailscale DNS name can already be "seerr".
+  if [[ "${service}" == "seerr" && "${container}" == "tailscale-seerr" ]] &&
+     ! docker inspect "${container}" >/dev/null 2>&1 &&
+     docker inspect tailscale-jellyseerr >/dev/null 2>&1; then
+    container="tailscale-jellyseerr"
+    cert_dir="/docker/jellyseerr/ts/state/certs"
+    if ! docker inspect "${container}" --format '{{range .Mounts}}{{printf "%s|%s\n" .Source .Destination}}{{end}}' |
+         grep -Fx '/docker/jellyseerr/ts/state|/var/lib/tailscale' >/dev/null; then
+      die "Migrated Seerr: Tailscale state mount is not /docker/jellyseerr/ts/state"
+    fi
+    log "Seerr: migrated sidecar ${container}; certs at ${cert_dir}"
+  fi
+
   if ! docker inspect "${container}" >/dev/null 2>&1; then
     log "Skipping ${service}: container not found (${container})"
     return 0
