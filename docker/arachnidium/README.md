@@ -54,10 +54,10 @@ Set all three values in `.env`: the OMV LAN IP, OMV Tailscale IP, and OMV MagicD
 Assign each proxy's private Docker IP to the Pi-hole profile it should use:
 
 ```bash
-/docker/pihole/pihole-profile-manager assign \
+/docker/pihole/pihm/pihole-profile-manager assign \
     "Personal" 172.30.53.101 --label arachnidium-personal
 
-/docker/pihole/pihole-profile-manager assign \
+/docker/pihole/pihm/pihole-profile-manager assign \
     "Family" 172.30.53.102 --label arachnidium-family
 ```
 
