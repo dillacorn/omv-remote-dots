@@ -280,6 +280,103 @@ get_ts_name() {
   docker exec "$TS_CONTAINER" tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'
 }
 
+# Compose CLI environment from an earlier manual deployment is not retained in
+# container labels. Reconstruct ONLY the missing DNS overlay inputs from Docker's
+# current runtime state; never guess addresses or silently change published ports.
+hydrate_pihole_compose_env() {
+  local -a files=()
+  local f inputs assignment key value
+  local need_tailnet=0 need_ipv6=0
+  mapfile -t files < <(compose_files pihole "$PIHOLE_DIR")
+  ((${#files[@]})) || fail 'Missing active Pi-hole Compose files'
+  for f in "${files[@]}"; do
+    if grep -Eq '\$\{TAILSCALE_IP([:}])' "$f"; then need_tailnet=1; fi
+    if grep -Eq '\$\{(PIHOLE_IPV6|LAN_INTERFACE|LAN_IPV6_SUBNET|LAN_IPV6_GATEWAY)([:}])' "$f"; then need_ipv6=1; fi
+  done
+  ((need_tailnet || need_ipv6)) || return 0
+
+  # Capture subprocess failures explicitly. Do not allow a broken Compose pipe
+  # to manifest as an unrelated JSONDecodeError in the subsequent validator.
+  inputs="$(python3 - "$need_tailnet" "$need_ipv6" <<'PYTHON'
+import ipaddress
+import json
+import subprocess
+import sys
+
+need_tailnet, need_ipv6 = map(int, sys.argv[1:])
+
+def inspect(*args):
+    return json.loads(subprocess.check_output(['docker', *args], text=True))[0]
+
+node = inspect('inspect', 'pihole')
+result = {}
+if need_tailnet:
+    ports = node.get('HostConfig', {}).get('PortBindings') or {}
+    def tailnet_addresses(proto):
+        found = set()
+        for binding in ports.get('53/' + proto, []) or []:
+            if str(binding.get('HostPort')) != '53':
+                continue
+            host = binding.get('HostIp', '')
+            try:
+                addr = ipaddress.ip_address(host)
+            except ValueError:
+                continue
+            if addr.version == 4 and addr in ipaddress.ip_network('100.64.0.0/10'):
+                found.add(str(addr))
+        return found
+    tcp, udp = tailnet_addresses('tcp'), tailnet_addresses('udp')
+    if len(tcp) != 1 or tcp != udp:
+        raise SystemExit('Cannot uniquely recover TAILSCALE_IP: current TCP/UDP port-53 host bindings do not agree')
+    result['TAILSCALE_IP'] = tcp.pop()
+
+if need_ipv6:
+    address = (node.get('NetworkSettings', {}).get('Networks', {})
+               .get('pihole_ipv6') or {}).get('GlobalIPv6Address', '')
+    if not address or ipaddress.ip_address(address).version != 6:
+        raise SystemExit('Cannot recover PIHOLE_IPV6: Pi-hole has no pihole_ipv6 attachment')
+    net = inspect('network', 'inspect', 'pihole_ipv6')
+    if net.get('Driver') != 'macvlan' or not net.get('EnableIPv6'):
+        raise SystemExit('pihole_ipv6 is not the expected IPv6 macvlan')
+    parent = (net.get('Options') or {}).get('parent', '')
+    if not parent or any(c.isspace() for c in parent):
+        raise SystemExit('Cannot recover LAN_INTERFACE from macvlan parent')
+    candidates = [(x.get('Subnet', ''), x.get('Gateway', ''))
+                  for x in net.get('IPAM', {}).get('Config', [])
+                  if x.get('Subnet') and
+                  ipaddress.ip_address(address) in ipaddress.ip_network(x['Subnet'], strict=False)]
+    if len(candidates) != 1 or not candidates[0][1]:
+        raise SystemExit('Cannot recover unique IPv6 subnet/gateway from pihole_ipv6')
+    subnet, gateway = candidates[0]
+    if ipaddress.ip_address(gateway).version != 6:
+        raise SystemExit('Recovered IPv6 gateway is invalid')
+    result.update(LAN_INTERFACE=parent, LAN_IPV6_SUBNET=subnet,
+                  LAN_IPV6_GATEWAY=gateway, PIHOLE_IPV6=address)
+
+for key, value in result.items():
+    if '\n' in value or '=' in value:
+        raise SystemExit(f'Unsafe value recovered for {key}')
+    print(f'{key}={value}')
+PYTHON
+  )" || fail 'Could not recover required Pi-hole overlay variables from the running Docker configuration'
+  [[ -n $inputs ]] || fail 'No runtime Pi-hole overlay variables recovered'
+  local -a assignments=()
+  mapfile -t assignments <<< "$inputs"
+  for assignment in "${assignments[@]}"; do
+    key=${assignment%%=*}
+    value=${assignment#*=}
+    case "$key" in
+      TAILSCALE_IP|LAN_INTERFACE|LAN_IPV6_SUBNET|LAN_IPV6_GATEWAY|PIHOLE_IPV6) ;;
+      *) fail "Unexpected recovered variable: $key" ;;
+    esac
+    if [[ -v $key && -n ${!key} && ${!key} != "$value" ]]; then
+      fail "$key is set to a value different from the running Pi-hole configuration"
+    fi
+    export "$key=$value"
+  done
+  say 'Pi-hole Compose overlay variables: recovered from running Docker state'
+}
+
 pihole_preflight() {
   [[ $(docker inspect pihole --format '{{.State.Running}}') == true ]] || fail 'Pi-hole is not running'
   [[ $(docker inspect nginx-pihole --format '{{.State.Running}}') == true ]] || fail 'nginx-pihole is not running'
@@ -288,6 +385,7 @@ pihole_preflight() {
   [[ $NEW_FQDN == seerr.*.ts.net ]] || fail "Tailscale machine is '$NEW_FQDN', not renamed to seerr. Rename it in Tailscale first."
   OLD_FQDN="jellyseerr.${NEW_FQDN#seerr.}"
   compose_args pihole "$PIHOLE_DIR" PDC
+  hydrate_pihole_compose_env
   NGINX_FILE="$PIHOLE_DIR/conf.d/jellyseerr.conf"
   [[ -f $NGINX_FILE ]] || fail "Expected legacy Nginx file missing: $NGINX_FILE"
   [[ ! -e $PIHOLE_DIR/conf.d/seerr.conf ]] || fail 'New nginx seerr.conf already exists; manual inspection required'
@@ -314,7 +412,10 @@ assert len(match)==1 and sys.argv[1] in match[0],"Live Pi-hole environment does 
 print("Live Pi-hole environment: legacy hostname found")
 ' "$OLD_FQDN"
   # Never assume that Compose overlays / environment at deployment time remain the same.
-  "${PDC[@]}" config --format json | python3 -c '
+  local rendered
+  rendered="$("${PDC[@]}" config --format json)" || fail 'Pi-hole Compose render failed; no changes made'
+  [[ -n $rendered ]] || fail 'Pi-hole Compose returned an empty configuration'
+  python3 -c '
 import json,subprocess,sys
 services=json.load(sys.stdin)["services"]
 assert "pihole" in services and "dnsproxy" in services,"Expected pihole and dnsproxy services"
@@ -335,14 +436,19 @@ for k,v in app.get("environment",{}).items():
     if k.startswith("FTLCONF_"):
         assert str(v)==live.get(k),f"{k} differs from live Pi-hole; do not recreate with unknown environment"
 # A missing runtime-only network/port variable can silently change a recreated
-# Pi-hole. Compare declared Compose bindings to actual container bindings.
+# Pi-hole. Compare declared Compose bindings and IPv6 address to actual runtime.
+net_settings=app.get("networks",{}).get("pihole_ipv6")
+if net_settings is not None:
+    runtime_ipv6=(observed.get("NetworkSettings",{}).get("Networks",{})
+                  .get("pihole_ipv6") or {}).get("GlobalIPv6Address","")
+    assert net_settings.get("ipv6_address")==runtime_ipv6,"Pi-hole IPv6 network attachment changed"
 for port in app.get("ports",[]):
     if port.get("published"):
         key=str(port["target"])+"/"+port.get("protocol","tcp")
         bindings=observed["HostConfig"].get("PortBindings",{}).get(key,[])
         assert any(b.get("HostPort")==str(port["published"]) and b.get("HostIp") in (port.get("host_ip",""),"", "0.0.0.0") for b in bindings),f"Port binding {key} not equal to running Pi-hole"
 print("Pi-hole Compose environment/ports matched to runtime")
-' "$OLD_FQDN"
+' "$OLD_FQDN" <<< "$rendered"
   [[ $(docker inspect dnsproxy --format '{{.State.Running}}') == true ]] || fail 'dnsproxy is not running; automatic Pi-hole service recreate unsupported'
   [[ $(docker inspect dnsproxy --format '{{index .Config.Labels "com.docker.compose.service"}}') == dnsproxy ]] || fail 'Unexpected DNS proxy Compose service'
   [[ $(docker inspect dnsproxy --format '{{index .Config.Labels "com.docker.compose.project"}}') == "$(docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project"}}')" ]] || fail 'DNS proxy belongs to another Compose project'
