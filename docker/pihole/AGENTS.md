@@ -176,6 +176,8 @@ Do not mix Arachnidium troubleshooting into normal Pi-hole DNS troubleshooting u
 
 pihm-web is optional and must remain separate from the pihm TUI. Do not make the TUI depend on the web service.
 
+Keep pihm files and state under `/docker/pihole/pihm/`. Pi-hole Compose/config/database state stays under `/docker/pihole/`. Do not reintroduce pihm executables, profiles, catalog files, source-ref files, or pihm backups at the Pi-hole directory root.
+
 The web interface should cover normal pihm/TUI management so browser users are not forced back to SSH for profile administration. When a new profile-management action is added, audit both TUI and web parity. Do not clone unrelated Pi-hole administration features that pihm itself does not own.
 
 Shared operations that change live Pi-hole identity/state, such as profile rename, should live in `pihole-profile-manager` and be called by both TUI and web. Web mutations should reuse pihm/pihole-profile-manager operations so database backups, profile ownership, Default fallback behavior, and Pi-hole reload behavior stay centralized.
