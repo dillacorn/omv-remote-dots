@@ -25,6 +25,7 @@ SEERR_CONTAINER=jellyseerr
 TS_CONTAINER=tailscale-jellyseerr
 DC=()
 PDC=()
+DNSPROXY_CONTAINER=
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; return 1; }
@@ -101,6 +102,24 @@ compose_args() {
   local -n dest=$3
   dest=(docker compose --project-directory "$dir" -p "$project")
   for file in "${files[@]}"; do dest+=(-f "$file"); done
+}
+
+# Discover the actual container for the Compose service, not a guessed name.
+# Users may customize container_name or Compose may generate one.
+resolve_dnsproxy_container() {
+  local project matches
+  local -a ids=()
+  project="$(docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project"}}')" || fail 'Cannot determine Pi-hole Compose project'
+  [[ -n $project && $project != '<no value>' ]] || fail 'Pi-hole has no Compose project label'
+  matches="$(docker ps -a -q \
+      --filter "label=com.docker.compose.project=$project" \
+      --filter 'label=com.docker.compose.service=dnsproxy')" || fail 'Cannot discover DNS proxy container'
+  if [[ -n $matches ]]; then mapfile -t ids <<< "$matches"; fi
+  (("${#ids[@]}" == 1)) || fail "Expected exactly one container for Compose service dnsproxy in project $project; found ${#ids[@]}. Inspect docker ps -a and do not recreate Pi-hole automatically."
+  DNSPROXY_CONTAINER=${ids[0]}
+  [[ $(docker inspect "$DNSPROXY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}') == dnsproxy ]] || fail 'DNS proxy container service label mismatch'
+  [[ $(docker inspect "$DNSPROXY_CONTAINER" --format '{{.State.Running}}') == true ]] || fail "DNS proxy container $DNSPROXY_CONTAINER is not running"
+  say "DNS proxy Compose service: container $(docker inspect "$DNSPROXY_CONTAINER" --format '{{.Name}}')"
 }
 
 # All database reads below are read-only. A MySQL-configured install is allowed
@@ -385,6 +404,7 @@ pihole_preflight() {
   [[ $NEW_FQDN == seerr.*.ts.net ]] || fail "Tailscale machine is '$NEW_FQDN', not renamed to seerr. Rename it in Tailscale first."
   OLD_FQDN="jellyseerr.${NEW_FQDN#seerr.}"
   compose_args pihole "$PIHOLE_DIR" PDC
+  resolve_dnsproxy_container
   hydrate_pihole_compose_env
   NGINX_FILE="$PIHOLE_DIR/conf.d/jellyseerr.conf"
   [[ -f $NGINX_FILE ]] || fail "Expected legacy Nginx file missing: $NGINX_FILE"
@@ -422,7 +442,7 @@ assert "pihole" in services and "dnsproxy" in services,"Expected pihole and dnsp
 app=services["pihole"]
 assert sys.argv[1] in app["environment"]["FTLCONF_dns_hosts"],"Current Compose is missing old hostname"
 observed=json.loads(subprocess.check_output(["docker","inspect","pihole"]))[0]
-proxy=json.loads(subprocess.check_output(["docker","inspect","dnsproxy"]))[0]
+proxy=json.loads(subprocess.check_output(["docker","inspect",sys.argv[2]]))[0]
 for name, runtime in (("pihole",observed),("dnsproxy",proxy)):
     declared=services[name]
     assert declared.get("image")==runtime["Config"].get("Image"),f"{name} runtime image differs from current Compose"
@@ -448,10 +468,10 @@ for port in app.get("ports",[]):
         bindings=observed["HostConfig"].get("PortBindings",{}).get(key,[])
         assert any(b.get("HostPort")==str(port["published"]) and b.get("HostIp") in (port.get("host_ip",""),"", "0.0.0.0") for b in bindings),f"Port binding {key} not equal to running Pi-hole"
 print("Pi-hole Compose environment/ports matched to runtime")
-' "$OLD_FQDN" <<< "$rendered"
-  [[ $(docker inspect dnsproxy --format '{{.State.Running}}') == true ]] || fail 'dnsproxy is not running; automatic Pi-hole service recreate unsupported'
-  [[ $(docker inspect dnsproxy --format '{{index .Config.Labels "com.docker.compose.service"}}') == dnsproxy ]] || fail 'Unexpected DNS proxy Compose service'
-  [[ $(docker inspect dnsproxy --format '{{index .Config.Labels "com.docker.compose.project"}}') == "$(docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project"}}')" ]] || fail 'DNS proxy belongs to another Compose project'
+' "$OLD_FQDN" "$DNSPROXY_CONTAINER" <<< "$rendered"
+  [[ $(docker inspect "$DNSPROXY_CONTAINER" --format '{{.State.Running}}') == true ]] || fail 'DNS proxy is not running; automatic Pi-hole service recreate unsupported'
+  [[ $(docker inspect "$DNSPROXY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}') == dnsproxy ]] || fail 'Unexpected DNS proxy Compose service'
+  [[ $(docker inspect "$DNSPROXY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}') == "$(docker inspect pihole --format '{{index .Config.Labels "com.docker.compose.project"}}')" ]] || fail 'DNS proxy belongs to another Compose project'
   say "Local DNS: $OLD_FQDN -> $NEW_FQDN"
   say "Nginx: $NGINX_FILE (backend stays tailscale-jellyseerr:5055)"
   say 'Pi-hole Compose file:' "$PIHOLE_COMPOSE_FILE"
@@ -511,7 +531,7 @@ x=json.load(sys.stdin)[0]["Config"]["Env"]
 hosts=[z.split("=",1)[1] for z in x if z.startswith("FTLCONF_dns_hosts=")]
 assert len(hosts)==1 and sys.argv[1] in hosts[0] and sys.argv[2] not in hosts[0],"New Pi-hole DNS hostname not loaded"
 print("Running Pi-hole DNS host update: OK")' "$NEW_FQDN" "$OLD_FQDN"
-  [[ $(docker inspect dnsproxy --format '{{.State.Running}}') == true ]] || fail 'DNS proxy not running after recreate'
+  [[ $(docker inspect "$DNSPROXY_CONTAINER" --format '{{.State.Running}}') == true ]] || fail 'DNS proxy not running after recreate'
   docker exec nginx-pihole nginx -s reload
   PIHOLE_SUCCESS=1
   say 'Pi-hole local DNS and Nginx routing updated and activated.'
