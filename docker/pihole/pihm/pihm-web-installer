@@ -194,6 +194,14 @@ if [[ "$LEGACY_HOME" != "$HOME" ]]; then
         archive_file "$path" "$legacy_archive"
     done
     shopt -u nullglob
+
+    for path in \
+        "$LEGACY_HOME/pihole-profile-manager" \
+        "$LEGACY_HOME/profile-catalog.ini" \
+        "$LEGACY_HOME/profiles.d"
+    do
+        [[ -L "$path" ]] && rm -f -- "$path"
+    done
 fi
 
 printf '\npihm-web installed.\n'
