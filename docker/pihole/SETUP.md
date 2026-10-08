@@ -47,7 +47,7 @@ Pi-hole works without pihm. Install pihm when you want file-backed profiles, per
 Install the Pi-hole profile manager:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/pihole/pihm-installer | bash
+curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/pihole/pihm/pihm-installer | bash
 ```
 
 Launch it:
