@@ -7,64 +7,64 @@
 
 set -euo pipefail
 
-REPO="\${PIHM_WEB_REPO:-dillacorn/omv-remote-dots}"
-PIHOLE_HOME="\${PIHOLE_HOME:-/docker/pihole}"
-HOME="\${PIHM_HOME:-\$PIHOLE_HOME/pihm}"
-LEGACY_HOME="\${PIHM_LEGACY_HOME:-\$PIHOLE_HOME}"
-BINDIR="\${PIHM_WEB_BINDIR:-/usr/local/bin}"
-ENV_FILE="\${PIHM_WEB_ENV_FILE:-/etc/pihm-web.env}"
+REPO="${PIHM_WEB_REPO:-dillacorn/omv-remote-dots}"
+PIHOLE_HOME="${PIHOLE_HOME:-/docker/pihole}"
+HOME="${PIHM_HOME:-$PIHOLE_HOME/pihm}"
+LEGACY_HOME="${PIHM_LEGACY_HOME:-$PIHOLE_HOME}"
+BINDIR="${PIHM_WEB_BINDIR:-/usr/local/bin}"
+ENV_FILE="${PIHM_WEB_ENV_FILE:-/etc/pihm-web.env}"
 SERVICE_FILE="/etc/systemd/system/pihm-web.service"
-ACTION="\${1:-install}"
+ACTION="${1:-install}"
 
-REF="\${PIHM_WEB_REF:-}"
-if [[ -z "\$REF" && -f "\$ENV_FILE" ]]; then
-    REF="\$(sed -n 's/^PIHM_WEB_SOURCE_REF=//p' "\$ENV_FILE" | tail -n1)"
+REF="${PIHM_WEB_REF:-}"
+if [[ -z "$REF" && -f "$ENV_FILE" ]]; then
+    REF="$(sed -n 's/^PIHM_WEB_SOURCE_REF=//p' "$ENV_FILE" | tail -n1)"
 fi
-if [[ -z "\$REF" && -f "\$HOME/.pihm-source-ref" ]]; then
-    REF="\$(cat "\$HOME/.pihm-source-ref")"
+if [[ -z "$REF" && -f "$HOME/.pihm-source-ref" ]]; then
+    REF="$(cat "$HOME/.pihm-source-ref")"
 fi
-REF="\${REF:-main}"
-RAW_BASE="https://raw.githubusercontent.com/\${REPO}/\${REF}/docker/pihole/pihm"
+REF="${REF:-main}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${REF}/docker/pihole/pihm"
 
 die() {
-    printf 'ERROR: %s\n' "\$*" >&2
+    printf 'ERROR: %s\n' "$*" >&2
     exit 1
 }
 
 need() {
-    command -v "\$1" >/dev/null 2>&1 || die "Required command not found: \$1"
+    command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
 archive_file() {
-    local src="\$1"
-    local archive_dir="\$2"
-    [[ -e "\$src" || -L "\$src" ]] || return 0
-    mkdir -p "\$archive_dir"
-    mv -- "\$src" "\$archive_dir/"
+    local src="$1"
+    local archive_dir="$2"
+    [[ -e "$src" || -L "$src" ]] || return 0
+    mkdir -p "$archive_dir"
+    mv -- "$src" "$archive_dir/"
 }
 
-[[ \${EUID:-\$(id -u)} -eq 0 ]] || die "Run as root (or with sudo)."
+[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run as root (or with sudo)."
 
-case "\$ACTION" in
+case "$ACTION" in
     install|update|uninstall|status) ;;
     *) die "Usage: pihm-web-installer [install|update|uninstall|status]" ;;
 esac
 
-if [[ "\$ACTION" == "status" ]]; then
+if [[ "$ACTION" == "status" ]]; then
     systemctl status pihm-web.service --no-pager
-    exit \$?
+    exit $?
 fi
 
-if [[ "\$ACTION" == "uninstall" ]]; then
+if [[ "$ACTION" == "uninstall" ]]; then
     systemctl disable --now pihm-web.service >/dev/null 2>&1 || true
-    rm -f "\$SERVICE_FILE" "\$BINDIR/pihm-web"
-    rm -f "\$HOME/pihm-web"
-    if [[ "\$LEGACY_HOME" != "\$HOME" ]]; then
-        rm -f "\$LEGACY_HOME/pihm-web"
+    rm -f "$SERVICE_FILE" "$BINDIR/pihm-web"
+    rm -f "$HOME/pihm-web"
+    if [[ "$LEGACY_HOME" != "$HOME" ]]; then
+        rm -f "$LEGACY_HOME/pihm-web"
     fi
     systemctl daemon-reload
     printf 'Removed pihm-web program/service files.\n'
-    printf 'Preserved %s and /var/lib/pihm-web so settings are not silently destroyed.\n' "\$ENV_FILE"
+    printf 'Preserved %s and /var/lib/pihm-web so settings are not silently destroyed.\n' "$ENV_FILE"
     exit 0
 fi
 
@@ -74,83 +74,83 @@ need python3
 need systemctl
 need cmp
 
-[[ -x "\$HOME/pihole-profile-manager" ]] || die "Install/update pihm first; missing \$HOME/pihole-profile-manager"
+[[ -x "$HOME/pihole-profile-manager" ]] || die "Install/update pihm first; missing $HOME/pihole-profile-manager"
 
-mkdir -p "\$HOME" "\$HOME/backups" "\$BINDIR"
+mkdir -p "$HOME" "$HOME/backups" "$BINDIR"
 
-stage="\$(mktemp -d)"
-trap 'rm -rf -- "\$stage"' EXIT
+stage="$(mktemp -d)"
+trap 'rm -rf -- "$stage"' EXIT
 
-curl -fsSL -H 'Cache-Control: no-cache' "\$RAW_BASE/pihm-web" -o "\$stage/pihm-web"
-curl -fsSL -H 'Cache-Control: no-cache' "\$RAW_BASE/pihm-web-installer" -o "\$stage/pihm-web-installer"
+curl -fsSL -H 'Cache-Control: no-cache' "$RAW_BASE/pihm-web" -o "$stage/pihm-web"
+curl -fsSL -H 'Cache-Control: no-cache' "$RAW_BASE/pihm-web-installer" -o "$stage/pihm-web-installer"
 
-python3 -m py_compile "\$stage/pihm-web"
-bash -n "\$stage/pihm-web-installer"
+python3 -m py_compile "$stage/pihm-web"
+bash -n "$stage/pihm-web-installer"
 
-stamp="\$(date '+%Y%m%d-%H%M%S')"
-update_backup="\$HOME/backups/update-\$stamp"
+stamp="$(date '+%Y%m%d-%H%M%S')"
+update_backup="$HOME/backups/update-$stamp"
 for target in pihm-web pihm-web-installer; do
-    if [[ -e "\$HOME/\$target" ]] && ! cmp -s "\$stage/\$target" "\$HOME/\$target"; then
-        mkdir -p "\$update_backup"
-        cp -a -- "\$HOME/\$target" "\$update_backup/\$target"
-        printf 'Backup: %s\n' "\$update_backup/\$target"
+    if [[ -e "$HOME/$target" ]] && ! cmp -s "$stage/$target" "$HOME/$target"; then
+        mkdir -p "$update_backup"
+        cp -a -- "$HOME/$target" "$update_backup/$target"
+        printf 'Backup: %s\n' "$update_backup/$target"
     fi
 done
-if [[ -e "\$SERVICE_FILE" ]]; then
-    mkdir -p "\$update_backup"
-    cp -a -- "\$SERVICE_FILE" "\$update_backup/pihm-web.service"
+if [[ -e "$SERVICE_FILE" ]]; then
+    mkdir -p "$update_backup"
+    cp -a -- "$SERVICE_FILE" "$update_backup/pihm-web.service"
 fi
 
-if [[ ! -f "\$ENV_FILE" ]]; then
+if [[ ! -f "$ENV_FILE" ]]; then
     umask 077
-    cat >"\$ENV_FILE" <<EOF
+    cat >"$ENV_FILE" <<EOF
 PIHM_WEB_BIND=127.0.0.1
 PIHM_WEB_PORT=8091
 PIHM_WEB_USERNAME=admin
 PIHM_WEB_AUTH_SOURCE=pihole
-PIHM_WEB_SOURCE_REF=\$REF
+PIHM_WEB_SOURCE_REF=$REF
 EOF
-    chmod 0600 "\$ENV_FILE"
-    printf 'Created %s\n' "\$ENV_FILE"
+    chmod 0600 "$ENV_FILE"
+    printf 'Created %s\n' "$ENV_FILE"
 else
-    if grep -q '^PIHM_WEB_PASSWORD=' "\$ENV_FILE"; then
-        backup="\$HOME/backups/pihm-web.env.backup-\$stamp"
-        cp -a "\$ENV_FILE" "\$backup"
-        tmp="\$(mktemp)"
-        sed '/^PIHM_WEB_PASSWORD=/d' "\$ENV_FILE" >"\$tmp"
-        if grep -q '^PIHM_WEB_AUTH_SOURCE=' "\$tmp"; then
-            sed -i 's/^PIHM_WEB_AUTH_SOURCE=.*/PIHM_WEB_AUTH_SOURCE=pihole/' "\$tmp"
+    if grep -q '^PIHM_WEB_PASSWORD=' "$ENV_FILE"; then
+        backup="$HOME/backups/pihm-web.env.backup-$stamp"
+        cp -a "$ENV_FILE" "$backup"
+        tmp="$(mktemp)"
+        sed '/^PIHM_WEB_PASSWORD=/d' "$ENV_FILE" >"$tmp"
+        if grep -q '^PIHM_WEB_AUTH_SOURCE=' "$tmp"; then
+            sed -i 's/^PIHM_WEB_AUTH_SOURCE=.*/PIHM_WEB_AUTH_SOURCE=pihole/' "$tmp"
         else
-            printf '\nPIHM_WEB_AUTH_SOURCE=pihole\n' >>"\$tmp"
+            printf '\nPIHM_WEB_AUTH_SOURCE=pihole\n' >>"$tmp"
         fi
-        install -m 0600 "\$tmp" "\$ENV_FILE"
-        rm -f "\$tmp"
-        printf 'Removed the old separate pihm-web password. Backup: %s\n' "\$backup"
-    elif ! grep -q '^PIHM_WEB_AUTH_SOURCE=' "\$ENV_FILE"; then
-        printf '\nPIHM_WEB_AUTH_SOURCE=pihole\n' >>"\$ENV_FILE"
-        chmod 0600 "\$ENV_FILE"
+        install -m 0600 "$tmp" "$ENV_FILE"
+        rm -f "$tmp"
+        printf 'Removed the old separate pihm-web password. Backup: %s\n' "$backup"
+    elif ! grep -q '^PIHM_WEB_AUTH_SOURCE=' "$ENV_FILE"; then
+        printf '\nPIHM_WEB_AUTH_SOURCE=pihole\n' >>"$ENV_FILE"
+        chmod 0600 "$ENV_FILE"
     fi
 fi
 
-if grep -q '^PIHM_WEB_SOURCE_REF=' "\$ENV_FILE"; then
-    sed -i "s|^PIHM_WEB_SOURCE_REF=.*|PIHM_WEB_SOURCE_REF=\$REF|" "\$ENV_FILE"
+if grep -q '^PIHM_WEB_SOURCE_REF=' "$ENV_FILE"; then
+    sed -i "s|^PIHM_WEB_SOURCE_REF=.*|PIHM_WEB_SOURCE_REF=$REF|" "$ENV_FILE"
 else
-    printf '\nPIHM_WEB_SOURCE_REF=%s\n' "\$REF" >>"\$ENV_FILE"
+    printf '\nPIHM_WEB_SOURCE_REF=%s\n' "$REF" >>"$ENV_FILE"
 fi
-chmod 0600 "\$ENV_FILE"
+chmod 0600 "$ENV_FILE"
 
 set -a
-. "\$ENV_FILE"
+. "$ENV_FILE"
 set +a
-PIHOLE_HOME="\$PIHOLE_HOME" PIHM_HOME="\$HOME" python3 "\$stage/pihm-web" --check
+PIHOLE_HOME="$PIHOLE_HOME" PIHM_HOME="$HOME" python3 "$stage/pihm-web" --check
 printf 'Staged pihm-web runtime validation: PASS\n'
 
-install -m 0755 "\$stage/pihm-web" "\$HOME/pihm-web"
-install -m 0755 "\$stage/pihm-web-installer" "\$HOME/pihm-web-installer"
-ln -sfn "\$HOME/pihm-web" "\$BINDIR/pihm-web"
-ln -sfn "\$HOME/pihm-web-installer" "\$BINDIR/pihm-web-installer"
+install -m 0755 "$stage/pihm-web" "$HOME/pihm-web"
+install -m 0755 "$stage/pihm-web-installer" "$HOME/pihm-web-installer"
+ln -sfn "$HOME/pihm-web" "$BINDIR/pihm-web"
+ln -sfn "$HOME/pihm-web-installer" "$BINDIR/pihm-web-installer"
 
-cat >"\$SERVICE_FILE" <<EOF
+cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=pihm web interface
 After=docker.service tailscaled.service
@@ -158,10 +158,10 @@ Wants=docker.service
 
 [Service]
 Type=simple
-EnvironmentFile=\$ENV_FILE
-Environment=PIHOLE_HOME=\$PIHOLE_HOME
-Environment=PIHM_HOME=\$HOME
-ExecStart=\$HOME/pihm-web
+EnvironmentFile=$ENV_FILE
+Environment=PIHOLE_HOME=$PIHOLE_HOME
+Environment=PIHM_HOME=$HOME
+ExecStart=$HOME/pihm-web
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
@@ -178,28 +178,28 @@ EOF
 systemctl daemon-reload
 
 set -a
-. "\$ENV_FILE"
+. "$ENV_FILE"
 set +a
-PIHOLE_HOME="\$PIHOLE_HOME" PIHM_HOME="\$HOME" "\$HOME/pihm-web" --check
+PIHOLE_HOME="$PIHOLE_HOME" PIHM_HOME="$HOME" "$HOME/pihm-web" --check
 
 systemctl enable pihm-web.service >/dev/null
 systemctl restart pihm-web.service
 systemctl is-active --quiet pihm-web.service || die "pihm-web service did not stay active after restart"
 
-if [[ "\$LEGACY_HOME" != "\$HOME" ]]; then
-    legacy_archive="\$HOME/backups/legacy-top-level-\$stamp"
-    archive_file "\$LEGACY_HOME/pihm-web" "\$legacy_archive"
+if [[ "$LEGACY_HOME" != "$HOME" ]]; then
+    legacy_archive="$HOME/backups/legacy-top-level-$stamp"
+    archive_file "$LEGACY_HOME/pihm-web" "$legacy_archive"
     shopt -s nullglob
-    for path in "\$LEGACY_HOME"/pihm-web.backup-*; do
-        archive_file "\$path" "\$legacy_archive"
+    for path in "$LEGACY_HOME"/pihm-web.backup-*; do
+        archive_file "$path" "$legacy_archive"
     done
     shopt -u nullglob
 fi
 
 printf '\npihm-web installed.\n'
 printf 'Local backend: http://127.0.0.1:8091\n'
-printf 'pihm home: %s\n' "\$HOME"
-printf 'Source ref: %s\n' "\$REF"
+printf 'pihm home: %s\n' "$HOME"
+printf 'Source ref: %s\n' "$REF"
 printf 'Status: pihm-web-installer status\n'
 printf 'Login username: admin\n'
 printf 'Login password: use the existing Pi-hole web password\n'
