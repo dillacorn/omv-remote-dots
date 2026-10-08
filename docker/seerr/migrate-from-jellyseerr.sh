@@ -454,7 +454,13 @@ for name, runtime in (("pihole",observed),("dnsproxy",proxy)):
 live={x.split("=",1)[0]:x.split("=",1)[1] for x in observed["Config"]["Env"] if "=" in x}
 for k,v in app.get("environment",{}).items():
     if k.startswith("FTLCONF_"):
-        assert str(v)==live.get(k),f"{k} differs from live Pi-hole; do not recreate with unknown environment"
+        expected=str(v)
+        if k=="FTLCONF_webserver_api_password":
+            # Compose config JSON retains escaped dollars ($$) while the
+            # container receives literal dollars ($). Compare decoded form
+            # without changing or displaying the configured password.
+            expected=expected.replace("$$","$")
+        assert expected==live.get(k),f"{k} differs from live Pi-hole; do not recreate with unknown environment"
 # A missing runtime-only network/port variable can silently change a recreated
 # Pi-hole. Compare declared Compose bindings and IPv6 address to actual runtime.
 net_settings=app.get("networks",{}).get("pihole_ipv6")
