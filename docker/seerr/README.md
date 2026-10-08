@@ -1,31 +1,77 @@
 # Seerr
 
-Maintained media-request application for Jellyfin, Sonarr and Radarr.
+Seerr is the maintained media-request application for Jellyfin, Sonarr and Radarr. It succeeds Jellyseerr and Overseerr.
 
-## Deployment template
+## New deployments
 
 - Image: `ghcr.io/seerr-team/seerr:v3.5.0`
-- Database: SQLite at `/app/config/db/db.sqlite3`
-- App configuration: `./seerr/config` on the host, mounted at `/app/config`
-- Application service: `seerr`, with Docker init enabled and image user UID/GID 1000
-- Tailscale sidecar: `tailscale-seerr`, with persistent `./ts/state`
-- Internal Tailscale Serve endpoint: HTTPS -> `http://127.0.0.1:5055` (tailnet only)
+- Database: SQLite under `/app/config/db/db.sqlite3`
+- Configuration bind mount: `./seerr/config:/app/config` (the image runs as UID/GID 1000)
+- Service: `seerr`, Docker `init: true`
+- Tailscale sidecar: `tailscale-seerr`, persistent state in `./ts/state`
+- Tailscale Serve: HTTPS to `http://127.0.0.1:5055` (tailnet only)
 
-Set `TS_AUTHKEY` locally, or reuse the existing Tailscale state when upgrading. Do not commit real credentials. For optional LAN access through the Pi-hole/Nginx reverse proxy, include `compose.local-webapps.yml` when deploying and configure the corresponding certificate mount.
+Edit `.env` for the new installation, populate your Tailscale authentication key locally if necessary, ensure the config mount is writable for UID/GID 1000, then use the Compose template. `compose.local-webapps.yml` is an optional LAN Nginx backend overlay. Never commit keys or reuse the same Tailscale state simultaneously in two containers.
 
-Open `https://<machine>.<tailnet>.ts.net` with Tailscale connected. The machine name is managed by Tailscale; renaming it in the Tailscale admin console does **not** rename the Docker containers or directories.
+## Existing Jellyseerr users: migration script
 
-## Existing Jellyseerr installations
+`migrate-from-jellyseerr.sh` upgrades **the supported `/docker/jellyseerr` Compose installation in place**. It retains the existing Compose project/service (`jellyseerr`), container (`jellyseerr`), and Tailscale sidecar (`tailscale-jellyseerr`) so existing HTTPS and integrations continue to point at the same node. **It does not rename Docker containers or move the live project to `/docker/seerr`.** This new directory is a clean-install template, not a file tree to copy over the existing project.
 
-**This directory is the clean-name template, not an in-place migration script.** A live Seerr installation upgraded from Jellyseerr can legitimately still be running under its older Compose project, service, container names and `/docker/jellyseerr` directory.
+Supported source: running `fallenbagel/jellyseerr` with the expected Compose service and `.env` settings, SQLite containing a valid `user` and `media_request` table, and a shared `tailscale` network namespace. If `DB_TYPE=mysql`, the script **only proceeds if the configured MariaDB database is verifiably empty**. Nonempty MySQL/MariaDB databases require a separate planned conversion: the script intentionally refuses to guess or discard their data. Unexpected Compose layout, mounts, missing state, or incompatible services also stop the migration.
 
-Before adopting `/docker/seerr` on such a host:
+On the OpenMediaVault host as root, download the script and inspect its output before applying:
 
-1. Confirm the actual running image, Compose files (including any `compose.override.yml`), volume mounts and Tailscale node identity. Back up the live Seerr SQLite database, `settings.json`, all application configuration, the Compose files, and persistent Tailscale `ts/state`.
-2. Plan the directory and Compose project rename together. Point `SEERR_CONFIG_PATH` at the **existing, verified** Seerr data; do not allow a fresh empty database to replace the migrated one. Keep the old data and database backups for rollback.
-3. Preserve the existing Tailscale state so the renamed sidecar retains its identity and MagicDNS address. Never run two Tailscale sidecars simultaneously against the same state. Review local reverse-proxy, certificate-renewal, Watchtower and restart-script references before renaming containers.
-4. Apply only the intended Compose project once the old containers are safely stopped. Verify the HTTPS endpoint, Jellyfin login, preserved requests/users, and Sonarr/Radarr integration before removing unused containers or paths.
+```bash
+curl -fsSLo /tmp/migrate-from-jellyseerr.sh \
+  https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/seerr/migrate-from-jellyseerr.sh
+bash /tmp/migrate-from-jellyseerr.sh --dry-run
+bash /tmp/migrate-from-jellyseerr.sh --apply
+```
 
-New installations require a writable app configuration directory for UID/GID 1000. Seerr uses SQLite without a MariaDB service.
+The script checks Docker identity, active Compose files including overrides, SQLite integrity, and MariaDB table inventory; stops **only** the old Jellyseerr app; makes a root-only cold backup of config, Compose, `.env`, and Tailscale state; copies the verified SQLite installation into a new config directory; switches the original Jellyseerr service to Seerr v3.5.0 with SQLite and `init: true`; starts it without restarting Tailscale or MariaDB; and checks HTTP startup and record preservation. A deployment failure attempts to restore the original Compose files and old Jellyseerr app. The old config and MariaDB data are never deleted. The script prints the backup location.
 
-The [official migration guide](https://docs.seerr.dev/migration-guide/) covers application-level Jellyseerr-to-Seerr upgrades.
+After completion, sign in using Jellyfin and confirm existing requests, users, Sonarr/Radarr integrations, and Jellyfin library sync. A passing HTTP check does not prove that all integrations work.
+
+## URL after migration
+
+The URL follows the **Tailscale machine name**, not the Seerr application image or Docker container name.
+
+- **Keep the old machine name:** continue using `https://jellyseerr.<your-tailnet>.ts.net`.
+- **Prefer `seerr`:** rename the *existing* Tailscale machine from `jellyseerr` to `seerr` in the Tailscale admin console, and use `https://seerr.<your-tailnet>.ts.net`. Disable automatic machine-name regeneration when setting the custom name. Keep the current Tailscale state; do **not** remove/re-register or run a second sidecar.
+
+The migration script prints the name reported by the running Tailscale node. Tailscale Serve uses the node's certificate name and keeps the same backend port. DNS/certificates used by an **optional local Pi-hole/Nginx proxy** are separate from Tailscale Serve and may still use the old hostname until updated.
+
+## Optional Pi-hole local DNS and Nginx rename
+
+If you use Pi-hole's `FTLCONF_dns_hosts` overrides and a local Nginx reverse proxy, and you've already renamed the **existing** Tailscale machine to `seerr`, update that local routing explicitly. If the application has already been migrated, run:
+
+```bash
+bash /tmp/migrate-from-jellyseerr.sh --pihole-only --dry-run
+bash /tmp/migrate-from-jellyseerr.sh --pihole-only --apply
+```
+
+If the Tailscale rename was done **before** migrating the app, you can opt into the local rename in the same command:
+
+```bash
+bash /tmp/migrate-from-jellyseerr.sh --dry-run --rename-pihole
+bash /tmp/migrate-from-jellyseerr.sh --apply --rename-pihole
+```
+
+The optional step derives the new FQDN from the *running* Tailscale node (`seerr.<tailnet>.ts.net`), checks for a matching new cert/key, and changes the exact old hostname in the **active** Pi-hole Compose DNS override and existing Nginx config. It deliberately **keeps** the backend `tailscale-jellyseerr:5055` and current certificate **mount directory**, because an in-place application migration did not rename either. It renames the Nginx config file to `seerr.conf`, checks `nginx -t`, recreates only the `pihole` and `dnsproxy` services from the **entire active Pi-hole Compose overlay set**, checks the running DNS host environment, and reloads Nginx. Expect a short DNS interruption. Original Pi-hole/Nginx files are backed up for rollback.
+
+This automated local-DNS step has **strict compatibility guards**: it requires running Pi-hole, `nginx-pihole`, and `dnsproxy` in the expected Compose topology; it verifies the old runtime DNS entry, source Compose values, published ports, certificate mount, and existing Nginx backend before writing. If any of these differ, it stops and requires manual review. It does not replace your custom Pi-hole Compose stack with a repository example, nor does it delete old certs or Tailscale state. Check actual LAN DNS resolution and HTTPS afterward; if clients cache the old DNS record, refresh their DNS cache.
+
+For the validated OMV layout, the intended path is:
+
+```text
+seerr.<tailnet>.ts.net -> Pi-hole LAN DNS -> OMV LAN IP -> nginx-pihole:443
+                    -> tailscale-jellyseerr:5055 -> Seerr
+```
+
+## Recovery and limitations
+
+If automatic rollback fails, stop and inspect the logged backup path, exact Compose files, image and container state before retrying. Do not run `docker compose down -v`, delete the original Jellyseerr/Seerr databases, or clean up unused MariaDB files until the new application and its integrations have been verified.
+
+This script does **not** automate changing Docker service/container names, Compose project name, or the Tailscale sidecar location. Those are a separate infrastructure migration that requires reviewing reverse-proxy mounts, cert-renewal tasks, Watchtower, maintenance scripts, and persistent Tailscale state. The script intentionally favors preserving the proven live topology.
+
+See the [official Seerr migration guide](https://docs.seerr.dev/migration-guide/) for supported product upgrades.
