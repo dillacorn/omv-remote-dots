@@ -94,7 +94,19 @@ migrate_profiles() {
     fi
   done
   shopt -u nullglob
-  rmdir "$legacy_profiles" 2>/dev/null || true
+
+  if [[ -d "$legacy_profiles" ]]; then
+    local extra_archive="$DEST/backups/legacy-profiles-extra-$stamp"
+    shopt -s dotglob nullglob
+    local extras=("$legacy_profiles"/*)
+    if (( ${#extras[@]} )); then
+      mkdir -p "$extra_archive"
+      mv -- "${extras[@]}" "$extra_archive/"
+      printf 'Archived unexpected legacy profile-directory content: %s\n' "$extra_archive"
+    fi
+    shopt -u dotglob nullglob
+    rmdir "$legacy_profiles" 2>/dev/null || true
+  fi
 }
 
 archive_legacy_core() {
