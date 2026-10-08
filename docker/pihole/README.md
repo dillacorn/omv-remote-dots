@@ -48,24 +48,26 @@ The profile manager below keeps groups, lists, allow/deny rules, blocked TLDs, a
 
 The short command is `pihm` ("Pi-hole Manager").
 
-Files:
+All pihm files live under [pihm/](pihm/) in the repository and under `/docker/pihole/pihm/` on the OMV host.
 
-- `pihm-installer` - install/update/uninstall helper
-- `pihole-profile-manager` - management program and CLI
-- `pihole-profile-tui` - arrow-key TUI for normal day-to-day management
-- `profile-catalog.ini` - maintained blocklist URLs
-- `profile.example.ini` - editable profile example
-- `/docker/pihole/profiles.d/*.ini` - live profile definitions
+Runtime highlights:
+
+- `/docker/pihole/pihm/pihole-profile-manager` - management program and CLI
+- `/docker/pihole/pihm/pihole-profile-tui` - arrow-key TUI
+- `/docker/pihole/pihm/profile-catalog.ini` - maintained blocklist URLs
+- `/docker/pihole/pihm/profile.example.ini` - editable profile example
+- `/docker/pihole/pihm/profiles.d/*.ini` - live profile definitions
+- `/docker/pihole/pihm/backups/` - pihm program/migration backups
 
 ### Install
 
 Run as root on the OMV host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/pihole/pihm-installer | bash
+curl -fsSL https://raw.githubusercontent.com/dillacorn/omv-remote-dots/main/docker/pihole/pihm/pihm-installer | bash
 ```
 
-The installer keeps the manager under `/docker/pihole`, creates `/usr/local/bin/pihm`, preserves existing profile files, backs up replaced manager files, and validates the Python programs before installing them.
+The installer keeps all pihm-managed files under `/docker/pihole/pihm`, creates `/usr/local/bin/pihm`, preserves existing profile files, archives old flat-layout files/backups during migration, and validates the Python programs before installing them.
 
 Updates are handled inside the TUI:
 
@@ -92,33 +94,33 @@ Launch it from anywhere:
 pihm
 ```
 
-Running `/docker/pihole/pihole-profile-manager` with no arguments opens the same TUI.
+Running `/docker/pihole/pihm/pihole-profile-manager` with no arguments opens the same TUI.
 
 Navigation is intentionally similar to smtty/Awtarchy: Up/Down or `j/k` moves, held arrow keys repeat, Enter selects or toggles, `h` opens Help from any menu, `q`/Esc goes back, and PgUp/PgDn scrolls long lists.
 
 The TUI can create, rename, and clone Normal/Strict/Parental/blank profiles, toggle blocklists, edit allow/deny rules and blocked TLDs, assign LAN/Tailscale clients, configure a proxy port/Docker IP per profile, apply profiles, rebuild Gravity, manage the daily timer, update `pihm` itself, and show exact proxy connection guidance. The profile list shows either `[proxy :PORT configured]` or `[no proxy]`. `[no proxy]` means the Pi-hole policy exists but no Arachnidium endpoint has been configured for it yet.
 
-On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/profiles.d/` without changing them.
+On an existing Pi-hole install, use **Profiles -> Import current Pi-hole groups** once. This captures the current groups into editable files under `/docker/pihole/pihm/profiles.d/` without changing them.
 
 Capture existing non-default Pi-hole groups as editable profiles:
 
 ```bash
-/docker/pihole/pihole-profile-manager capture --all
+/docker/pihole/pihm/pihole-profile-manager capture --all
 ```
 
 Inspect them:
 
 ```bash
-/docker/pihole/pihole-profile-manager list
-/docker/pihole/pihole-profile-manager status
-/docker/pihole/pihole-profile-manager show "Home Router"
+/docker/pihole/pihm/pihole-profile-manager list
+/docker/pihole/pihm/pihole-profile-manager status
+/docker/pihole/pihm/pihole-profile-manager show "Home Router"
 ```
 
 Edit and apply a profile:
 
 ```bash
-/docker/pihole/pihole-profile-manager edit "Home Router"
-/docker/pihole/pihole-profile-manager apply "Home Router" --gravity
+/docker/pihole/pihm/pihole-profile-manager edit "Home Router"
+/docker/pihole/pihm/pihole-profile-manager apply "Home Router" --gravity
 ```
 
 In the TUI, **Sync to Pi-hole** synchronizes the profile definition into Pi-hole: group description, selected list-to-group assignments, allow/deny regex rules, blocked TLDs, client assignments, and the configured Arachnidium proxy Docker IP. It creates a timestamped SQLite backup first, then reloads DNS. It does **not** redownload blocklist contents.
@@ -128,9 +130,9 @@ In the TUI, **Sync to Pi-hole** synchronizes the profile definition into Pi-hole
 Create a new profile from a preset:
 
 ```bash
-/docker/pihole/pihole-profile-manager new "Guest" --preset normal
-/docker/pihole/pihole-profile-manager edit "Guest"
-/docker/pihole/pihole-profile-manager apply "Guest" --gravity
+/docker/pihole/pihm/pihole-profile-manager new "Guest" --preset normal
+/docker/pihole/pihm/pihole-profile-manager edit "Guest"
+/docker/pihole/pihm/pihole-profile-manager apply "Guest" --gravity
 ```
 
 Available presets:
@@ -142,27 +144,27 @@ Available presets:
 Clone an existing profile:
 
 ```bash
-/docker/pihole/pihole-profile-manager new "Tablet" --clone "Guest"
+/docker/pihole/pihm/pihole-profile-manager new "Tablet" --clone "Guest"
 ```
 
 Assign a normal client or profile-aware proxy by IP:
 
 ```bash
-/docker/pihole/pihole-profile-manager assign \
+/docker/pihole/pihm/pihole-profile-manager assign \
     "Guest" 100.64.0.50 --label tablet
 ```
 
 Return it to Pi-hole's Default group:
 
 ```bash
-/docker/pihole/pihole-profile-manager unassign 100.64.0.50
+/docker/pihole/pihm/pihole-profile-manager unassign 100.64.0.50
 ```
 
 Every database-changing command creates a timestamped online SQLite backup beside `gravity.db` before writing.
 
 ### Profile format
 
-Start from `profile.example.ini`.
+Start from `pihm/profile.example.ini`.
 
 ```ini
 [profile]
@@ -262,7 +264,7 @@ pihm
 -> Web interface
 ```
 
-See [PIHM-WEB.md](PIHM-WEB.md) for access, authentication, multi-tailnet setup, and security details.
+See [pihm/WEB.md](pihm/WEB.md) for access, authentication, multi-tailnet setup, and security details.
 
 ## Daily blocklist updates
 
@@ -271,21 +273,21 @@ Pi-hole does not continuously stream changes from the configured list URLs. Grav
 For predictable daily updates, enable the persistent daily Gravity timer from **pihm -> Maintenance -> Enable daily blocklist updates**. The default run time is 03:15 with a randomized delay of up to 20 minutes:
 
 ```bash
-/docker/pihole/pihole-profile-manager timer install
+/docker/pihole/pihm/pihole-profile-manager timer install
 ```
 
 Use another local time if wanted:
 
 ```bash
-/docker/pihole/pihole-profile-manager timer install \
+/docker/pihole/pihm/pihole-profile-manager timer install \
     --on-calendar '*-*-* 04:30:00'
 ```
 
 Status/remove:
 
 ```bash
-/docker/pihole/pihole-profile-manager timer status
-/docker/pihole/pihole-profile-manager timer remove
+/docker/pihole/pihm/pihole-profile-manager timer status
+/docker/pihole/pihm/pihole-profile-manager timer remove
 ```
 
 This updates blocklists only. It does not auto-update the Pi-hole container.
@@ -372,7 +374,7 @@ Each proxy container uses a unique `172.30.53.x` address, `172.30.53.2` as DNS, 
 Assign the proxy container IP to the profile:
 
 ```bash
-/docker/pihole/pihole-profile-manager assign \
+/docker/pihole/pihm/pihole-profile-manager assign \
     "Personal" 172.30.53.101 --label arachnidium-personal
 ```
 
