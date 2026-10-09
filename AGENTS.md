@@ -1,0 +1,32 @@
+# Repository instructions for omv-remote-dots
+
+Applies to this repository, including `docker/` and OMV service documentation.
+
+## Project and operational boundaries
+
+- This repository contains OpenMediaVault host notes, scripts, and Docker/Compose examples. It is **not** a complete, authoritative image of a live OMV server.
+- Before any host-specific diagnosis or suggested change, establish the **current host**, actual container names, Compose project/service names, and relevant live paths from that host. Do not infer them from old output, another server, or the example repository.
+- Treat source files, example Compose configuration, active Compose files, container state, and host files as distinct. A commit to `main` does **not** prove that the running server has changed, and applying a host change is a separate authorization.
+- Preserve persistent Docker volumes, databases, configuration, secrets, filesystem ownership, networking, DNS, and backup data. Never replace, prune, reset, migrate, or delete live data based only on example paths; require appropriate host evidence, safety checks, and explicit permission for destructive operations.
+- `docker/pihole/` documents Pi-hole, Quad9/DNS transport, Tailscale/DNS routing, profile management (`pihm`), and optional Arachnidium integrations. Preserve live DNS availability and profile separation; never assume container, network, or configuration names without checking.
+- Updates sourced from `main` may be fetched by host-side installation/update helpers even without a GitHub Release. Document this distinction; do not assume adding a release tag alone deploys any code.
+- Do not commit credentials, environment secrets, Tailscale auth data, private keys, passwords, database copies, or sensitive device-specific output.
+
+## Merge and release authorization
+
+Operate autonomously within the user's approved scope; do not add needless approval checkpoints.
+
+- Implementation, investigation, fixes, tests, branches, and ordinary review PRs are not implicit authorization to merge, tag, or publish.
+- A clear request to merge, commit/apply directly to `main`, tag, or publish authorizes the named operation for the specified work. An approved release includes its necessary scoped merge unless the user specifies a different target or restriction; do not ask for the same approval twice.
+- An authorized but **unfinished** merge/release remains authorized through related small fixes, adjustments, tests, and interruptions. If the user pauses the release to correct a defect, an unambiguous "good to go", "working, continue", "looks good", or equivalent can resume the **same previously approved** operation. A pause ("wait"/"hold off") must be respected until the user signals continuation.
+- The approval is **consumed when that operation finishes**. After a release has been published, fixing another issue or hearing "perfect"/"that works" does not authorize a follow-up merge or release. A new release requires a new authorization, even for a fix to the previous one.
+- Stop and clarify when authorization is genuinely unclear, explicitly withdrawn, or when the scope, release target, or version materially changes. Do not invent an approval merely because CI passed, a prior release happened, or publishing would be convenient.
+- A user can expressly approve releasing without manual runtime testing. Run reasonable available static/CI checks and report what was actually validated; do not misrepresent missing runtime testing or ignore significant failing checks.
+- Preparing release notes, identifying a proposed version, writing code, and opening a feature PR are not themselves publication. Creating or triggering release-publishing workflows, one-use GitHub Actions release bridges, Git tags, Releases, uploads, or other publication requires an active approval for that specific release.
+- Preserve any stricter project-specific permissions for deployments, package publication, destructive changes, and external infrastructure. A GitHub Release authorization does not inherently approve deployment, package publication, or replacing production data.
+
+## Validation and release readiness
+
+- Inspect the actual modified files and validate shell/Python/Compose syntax with appropriate available tools. Do not claim a real host integration test on the basis of static repository checks.
+- No GitHub Release need be created for routine repository changes. If the user later requests releases, first verify existing tags/versions, precisely identify what is included, and link relevant setup/update documentation; only then publish within the explicit approved scope.
+- Keep changes to remote installation/deployment, container restarts, database writes, network/DNS reconfiguration, and host updates separate from ordinary repository edits unless expressly authorized.
